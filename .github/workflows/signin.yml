@@ -1,0 +1,50 @@
+name: 自动签到
+
+on:
+  schedule:
+    # 北京时间每周一 09:00 = UTC 每周一 01:00
+    # 注意：GitHub 的定时任务在高负载时可能延迟数分钟到一小时
+    - cron: '0 1 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只走流程不实际提交'
+        type: boolean
+        default: false
+
+jobs:
+  signin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # ddddocr 依赖 opencv，Ubuntu 上需要这些系统库
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libglib2.0-0
+
+      - name: 安装 Python 依赖
+        run: pip install -r requirements.txt
+
+      - name: 执行签到
+        env:
+          JXF_USERNAME: ${{ secrets.JXF_USERNAME }}
+          JXF_PASSWORD: ${{ secrets.JXF_PASSWORD }}
+        run: |
+          python signin.py ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: 汇总
+        if: always()
+        run: |
+          echo "### 签到结果" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -20 signin.log 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "无日志" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
