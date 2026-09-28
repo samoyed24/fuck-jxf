@@ -188,11 +188,13 @@ uv pip install -r requirements.txt
 ### 命令行参数
 
 ```bash
-python signin.py            # 签到（今天已签则跳过）
+python signin.py            # 签到
 python signin.py --check    # 只查状态，不签到
 python signin.py --dry-run  # 走完整流程但不提交
-python signin.py --force    # 今天已签也再提交一次
 ```
+
+脚本不判断「今天是否已签到」，直接提交。若今天已签过，服务端会返回
+「已签到」，脚本将其视为正常结果（退出码 0），不会报错。
 
 > 需要定时执行请使用 GitHub Actions（见上文），无需本地常驻进程。
 

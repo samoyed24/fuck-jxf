@@ -342,7 +342,6 @@ def resolve_coords(sess: requests.Session, cfg: dict,
         "  请先在小程序里手动签到一次，之后脚本会自动复用该坐标。"
     )
 
-
 def do_signin(sess: requests.Session, cfg: dict, token: str,
               lng: float, lat: float) -> bool:
     try:
@@ -374,8 +373,7 @@ def do_signin(sess: requests.Session, cfg: dict, token: str,
 def main() -> int:
     ap = argparse.ArgumentParser(description="fuck-jxf 自动签到")
     ap.add_argument("--dry-run", action="store_true", help="只登录+查状态，不提交")
-    ap.add_argument("--force", action="store_true", help="今天已签到时仍再签一次")
-    ap.add_argument("--check", action="store_true", help="只显示状态")
+    ap.add_argument("--check", action="store_true", help="只显示状态，不签到")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -396,19 +394,17 @@ def main() -> int:
         return finish(False, "登录失败（验证码重试用尽或账号密码错误）")
 
     today = today_str()
-    recs = fetch_records(sess, cfg, token, today, today)
-    log(f"今天已有 {len(recs)} 条签到记录")
-    for rec in recs:
-        log(f"  id={rec.get('id')} 坐标=({rec.get('lng')}, {rec.get('lat')}) "
-            f"地址={rec.get('address')} 时间={rec.get('createdAt')}")
-
     if args.check:
+        recs = fetch_records(sess, cfg, token, today, today)
+        log(f"今天已有 {len(recs)} 条签到记录")
+        for rec in recs:
+            log(f"  id={rec.get('id')} 坐标=({rec.get('lng')}, {rec.get('lat')}) "
+                f"地址={rec.get('address')} 时间={rec.get('createdAt')}")
         return finish(True, f"仅查询状态，今天已有 {len(recs)} 条签到记录")
 
-    if recs and not args.force:
-        log("今天已签到，跳过（--force 可强制再签）")
-        return finish(True, f"今天已签到，跳过（已有 {len(recs)} 条记录）")
-
+    # 不做「今天是否已签到」的预检查 —— 那是服务端的职责。
+    # 客户端重复判断只会引入分歧：本地时区、日期边界算错都会导致误跳过。
+    # 若今天确实已签过，服务端会返回「已签到」，do_signin 将其视为成功。
     try:
         lng, lat = resolve_coords(sess, cfg, token)
     except SystemExit as e:
