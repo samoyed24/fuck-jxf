@@ -74,10 +74,40 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 **Settings → Secrets and variables → Actions → New repository secret**，
 添加以下 secrets：
 
-| Secret 名称 | 必填 | 说明 |
+**必填**
+
+| Secret 名称 | 说明 |
+|---|---|
+| `JXF_USERNAME` | 登录账号（学号） |
+| `JXF_PASSWORD` | 登录密码 |
+
+**可选：邮件通知**
+
+不配置则不发邮件。要启用需**同时配置**下面四项，缺一不可（配置不完整会直接报错退出）：
+
+| Secret 名称 | 说明 |
+|---|---|
+| `JXF_MAIL_HOST` | SMTP 服务器，如 `smtp.qq.com`、`smtp.163.com` |
+| `JXF_MAIL_USER` | 发件邮箱 |
+| `JXF_MAIL_PASSWORD` | 邮箱**授权码**（不是登录密码） |
+| `JXF_MAIL_TO` | 收件邮箱 |
+
+**可选：通知开关**
+
+| Secret 名称 | 默认 | 说明 |
 |---|---|---|
-| `JXF_USERNAME` | ✅ | 登录账号（学号） |
-| `JXF_PASSWORD` | ✅ | 登录密码 |
+| `JXF_MAIL_NOTIFY_SUCCESS` | `false` | 签到成功时是否发邮件 |
+| `JXF_MAIL_NOTIFY_FAILURE` | `true` | 签到失败时是否发邮件 |
+| `JXF_MAIL_PORT` | `465` | SMTP 端口，使用 SSL |
+
+布尔值接受 `true/false`、`yes/no`、`1/0`、`on/off`（不区分大小写）。
+**写错会直接报错退出**，不会静默取默认值。
+
+> 默认只在**失败时**发邮件 —— 签到成功是常态，每周收一封成功邮件意义不大。
+> 如果你希望每次都有回执，把 `JXF_MAIL_NOTIFY_SUCCESS` 设为 `true`。
+
+**授权码怎么拿**：以 QQ 邮箱为例，设置 → 账户 → 开启 SMTP 服务 →
+生成授权码。163 邮箱类似。**注意授权码不是邮箱登录密码。**
 
 > **坐标无需配置。** 脚本会自动复用最近一次成功签到的坐标，
 > 以保证每次提交的位置完全一致。
@@ -173,10 +203,24 @@ python signin.py --force    # 今天已签也再提交一次
 本地写在 `.env`，CI 里配在 GitHub Secrets —— **变量名完全一致**，
 所以本地跑通即代表 CI 能跑通。
 
-| 变量 | 必填 | 说明 |
+**必填**
+
+| 变量 | 说明 |
+|---|---|
+| `JXF_USERNAME` | 登录账号（学号） |
+| `JXF_PASSWORD` | 登录密码 |
+
+**可选：邮件通知**（不配置则不发邮件）
+
+| 变量 | 默认 | 说明 |
 |---|---|---|
-| `JXF_USERNAME` | ✅ | 登录账号（学号） |
-| `JXF_PASSWORD` | ✅ | 登录密码 |
+| `JXF_MAIL_HOST` | — | SMTP 服务器 |
+| `JXF_MAIL_USER` | — | 发件邮箱 |
+| `JXF_MAIL_PASSWORD` | — | 邮箱授权码 |
+| `JXF_MAIL_TO` | — | 收件邮箱 |
+| `JXF_MAIL_PORT` | `465` | SMTP 端口（SSL） |
+| `JXF_MAIL_NOTIFY_SUCCESS` | `false` | 成功时是否发邮件 |
+| `JXF_MAIL_NOTIFY_FAILURE` | `true` | 失败时是否发邮件 |
 
 坐标**不需要配置**，脚本自动复用最近一次成功签到的坐标。
 
@@ -212,6 +256,14 @@ A: 按可能性排查：
 1. **workflow 被自动停用**（最常见）—— 去 Actions 页面看是否有 disabled 横幅，点 Enable 恢复。详见上文「7. 保活」。
 2. **Fork 仓库的 Actions 未启用** —— 见上文「2. 启用 Actions」。
 3. **cron 延迟** —— GitHub Actions 在平台高负载时会延迟，通常数分钟内，偶尔更久。这是平台特性，无法从代码层面解决。
+
+**Q: 没收到通知邮件？**
+A: 依次检查：
+1. `JXF_MAIL_NOTIFY_SUCCESS` 默认为 `false`，成功时本来就不发信
+2. 四个必填项（HOST/USER/PASSWORD/TO）是否都配了，缺一个会直接报错
+3. `JXF_MAIL_PASSWORD` 填的是**授权码**还是登录密码 —— 必须是授权码
+4. 收件箱的垃圾邮件目录
+5. Actions 日志里搜「邮件」看是否有发送失败的提示
 
 **Q: 验证码识别失败？**
 A: 脚本默认重试 6 次（每次重新获取验证码）。若持续失败，可能是验证码机制变更，需要调整 OCR 逻辑。

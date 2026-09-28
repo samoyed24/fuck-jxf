@@ -19,6 +19,10 @@ fuck-jxf — 自动登录 + 验证码识别 + 签到
   后端按位置偏差判定异常签到（isWarning），因此坐标不提供手动配置，
   只复用「最近一次成功签到」的坐标，保证每次完全一致。
   若近 30 天内无签到记录，脚本报错退出，需先手动签到一次。
+
+邮件通知：
+  通过 JXF_MAIL_* 系列变量配置，可分别控制成功/失败时是否发送。
+  邮件发送失败不会影响签到结果。
 """
 from __future__ import annotations
 
@@ -27,8 +31,10 @@ import base64
 import json
 import os
 import re
+import smtplib
 import sys
 from datetime import date, datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
 
 import ddddocr
@@ -89,6 +95,19 @@ def headers(token: str | None = None, json_body: bool = False) -> dict[str, str]
 
 # ---------------------------------------------------------------- 配置
 
+def _parse_bool(raw: str, env_key: str) -> bool:
+    """严格解析布尔值。无法识别时显式失败，不静默取默认值。"""
+    v = raw.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    raise SystemExit(
+        f"环境变量 {env_key} 的值无法识别：{raw!r}\n"
+        "  可选值：true/false、yes/no、1/0、on/off"
+    )
+
+
 def load_config() -> dict:
     """从环境变量读取配置（.env 已由 load_dotenv 注入）。"""
     cfg: dict = {}
@@ -96,6 +115,13 @@ def load_config() -> dict:
     for env_key, cfg_key in (
         ("JXF_USERNAME", "username"),
         ("JXF_PASSWORD", "password"),
+        ("JXF_MAIL_HOST", "mail_host"),
+        ("JXF_MAIL_PORT", "mail_port"),
+        ("JXF_MAIL_USER", "mail_user"),
+        ("JXF_MAIL_PASSWORD", "mail_password"),
+        ("JXF_MAIL_TO", "mail_to"),
+        ("JXF_MAIL_NOTIFY_SUCCESS", "notify_success"),
+        ("JXF_MAIL_NOTIFY_FAILURE", "notify_failure"),
     ):
         val = os.environ.get(env_key)
         if val:
@@ -104,12 +130,81 @@ def load_config() -> dict:
     cfg.setdefault("captcha_retries", 6)
     cfg.setdefault("request_timeout", 15)
 
+    # 邮件通知开关：默认「失败时发、成功时不发」，避免每周收到无意义邮件
+    cfg["notify_success"] = _parse_bool(
+        cfg.get("notify_success", "false"), "JXF_MAIL_NOTIFY_SUCCESS")
+    cfg["notify_failure"] = _parse_bool(
+        cfg.get("notify_failure", "true"), "JXF_MAIL_NOTIFY_FAILURE")
+
+    # 端口
+    if cfg.get("mail_port"):
+        try:
+            cfg["mail_port"] = int(cfg["mail_port"])
+        except ValueError:
+            raise SystemExit(
+                f"环境变量 JXF_MAIL_PORT 必须是数字：{cfg['mail_port']!r}")
+    else:
+        cfg["mail_port"] = 465
+
+    # 邮件配置完整性校验：要么全配，要么全不配
+    mail_keys = ("mail_host", "mail_user", "mail_password", "mail_to")
+    present = [k for k in mail_keys if cfg.get(k)]
+    if present and len(present) != len(mail_keys):
+        missing = [k for k in mail_keys if not cfg.get(k)]
+        raise SystemExit(
+            "邮件配置不完整。缺少：" + "、".join(missing) + "\n"
+            "  需要同时配置 JXF_MAIL_HOST / JXF_MAIL_USER / "
+            "JXF_MAIL_PASSWORD / JXF_MAIL_TO，或全部留空以禁用邮件通知"
+        )
+    cfg["mail_enabled"] = bool(present)
+
     if not cfg.get("username") or not cfg.get("password"):
         raise SystemExit(
             "缺少凭据：请复制 .env.example 为 .env 并填写，"
             "或设置环境变量 JXF_USERNAME / JXF_PASSWORD"
         )
     return cfg
+
+
+# ---------------------------------------------------------------- 邮件通知
+
+def send_mail(cfg: dict, subject: str, body: str) -> None:
+    """发送通知邮件。失败只记录，不影响签到结果。"""
+    if not cfg.get("mail_enabled"):
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = cfg["mail_user"]
+    msg["To"] = cfg["mail_to"]
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP_SSL(cfg["mail_host"], cfg["mail_port"],
+                              timeout=cfg["request_timeout"]) as s:
+            s.login(cfg["mail_user"], cfg["mail_password"])
+            s.send_message(msg)
+        log(f"  邮件已发送 → {cfg['mail_to']}")
+    except Exception as e:
+        # 通知失败不应让整个任务失败 —— 签到本身可能已经成功
+        log(f"  邮件发送失败: {e}")
+
+
+def notify(cfg: dict, ok: bool, summary: str) -> None:
+    """按配置决定是否发送通知。"""
+    if ok and not cfg["notify_success"]:
+        return
+    if not ok and not cfg["notify_failure"]:
+        return
+
+    icon = "✓" if ok else "✗"
+    subject = f"{icon} 签到{'成功' if ok else '失败'} — {cfg['username']}"
+    body = (
+        f"账号：{cfg['username']}\n"
+        f"时间：{datetime.now():%Y-%m-%d %H:%M:%S}\n"
+        f"结果：{summary}\n"
+    )
+    send_mail(cfg, subject, body)
 
 
 # ---------------------------------------------------------------- 验证码
@@ -269,10 +364,19 @@ def main() -> int:
     cfg = load_config()
     log(f"账号 {cfg['username']}")
 
+    # 每次运行只通知一次。中途若已发送，结束时不再重复。
+    sent = {"done": False}
+
+    def finish(ok: bool, summary: str) -> int:
+        if not sent["done"]:
+            sent["done"] = True
+            notify(cfg, ok, summary)
+        return 0 if ok else 1
+
     sess = requests.Session()
     token = login(sess, cfg)
     if not token:
-        return 1
+        return finish(False, "登录失败（验证码重试用尽或账号密码错误）")
 
     today = date.today().isoformat()
     recs = fetch_records(sess, cfg, token, today, today)
@@ -282,18 +386,25 @@ def main() -> int:
             f"地址={rec.get('address')} 时间={rec.get('createdAt')}")
 
     if args.check:
-        return 0
+        return finish(True, f"仅查询状态，今天已有 {len(recs)} 条签到记录")
 
     if recs and not args.force:
         log("今天已签到，跳过（--force 可强制再签）")
-        return 0
+        return finish(True, f"今天已签到，跳过（已有 {len(recs)} 条记录）")
 
-    lng, lat = resolve_coords(sess, cfg, token)
+    try:
+        lng, lat = resolve_coords(sess, cfg, token)
+    except SystemExit as e:
+        return finish(False, f"取坐标失败：{e}")
+
     if args.dry_run:
         log(f"[dry-run] 不实际提交（坐标 {lng}, {lat}）")
-        return 0
+        return finish(True, f"[dry-run] 未实际提交（坐标 {lng}, {lat}）")
 
-    return 0 if do_signin(sess, cfg, token, lng, lat) else 1
+    ok = do_signin(sess, cfg, token, lng, lat)
+    summary = (f"签到成功（坐标 {lng}, {lat}）" if ok
+               else "签到失败，请查看运行日志")
+    return finish(ok, summary)
 
 
 if __name__ == "__main__":
