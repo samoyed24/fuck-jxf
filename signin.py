@@ -376,6 +376,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="fuck-jxf 自动签到")
     ap.add_argument("--dry-run", action="store_true", help="只登录+查状态，不提交")
     ap.add_argument("--check", action="store_true", help="只显示状态，不签到")
+    ap.add_argument("--force", action="store_true",
+                    help="今天已有记录时仍强制提交一次")
     args = ap.parse_args()
 
     cfg = load_config()
@@ -396,25 +398,48 @@ def main() -> int:
         return finish(False, "登录失败（验证码重试用尽或账号密码错误）")
 
     today = today_str()
+    recs = fetch_records(sess, cfg, token, today, today)
+
     if args.check:
-        recs = fetch_records(sess, cfg, token, today, today)
         log(f"今天已有 {len(recs)} 条签到记录")
         for rec in recs:
             log(f"  id={rec.get('id')} 坐标=({rec.get('lng')}, {rec.get('lat')}) "
                 f"地址={rec.get('address')} 时间={rec.get('createdAt')}")
         return finish(True, f"仅查询状态，今天已有 {len(recs)} 条签到记录")
 
-    # 不做「今天是否已签到」的预检查 —— 那是服务端的职责。
-    # 客户端重复判断只会引入分歧：本地时区、日期边界算错都会导致误跳过。
-    # 若今天确实已签过，服务端会返回「已签到」，do_signin 将其视为成功。
+    # dry-run 只观察不提交，不受预检查影响 —— 它本就不打算真的签到。
+    if args.dry_run:
+        try:
+            lng, lat = resolve_coords(sess, cfg, token)
+        except SystemExit as e:
+            return finish(False, f"取坐标失败：{e}")
+        log(f"[dry-run] 今天已有 {len(recs)} 条记录，"
+            f"将提交坐标 ({lng}, {lat})，但不实际提交")
+        return finish(True, f"[dry-run] 未实际提交（坐标 {lng}, {lat}）")
+
+    # 预检查：今天已有记录时不提交，并返回失败。
+    #
+    # 返回失败而非成功，是因为脚本此时并未执行任何签到动作 ——
+    # 报成功会造成「显示成功但实际未签到」的静默失败。
+    # 已有记录是否有效（是否被服务端认定、是否 isWarning）无法从此接口判定，
+    # 需人工核实，故以失败告警。要强制提交用 --force。
+    if recs and not args.force:
+        log(f"今天已有 {len(recs)} 条签到记录：")
+        for rec in recs:
+            log(f"  id={rec.get('id')} 坐标=({rec.get('lng')}, {rec.get('lat')}) "
+                f"地址={rec.get('address')} 时间={rec.get('createdAt')} "
+                f"isWarning={rec.get('isWarning')}")
+        log("未提交签到（已有记录，无法确认其是否有效）")
+        return finish(
+            False,
+            f"今天已有 {len(recs)} 条记录，未提交。"
+            "请自行核实该记录是否有效，或加 --force 强制提交"
+        )
+
     try:
         lng, lat = resolve_coords(sess, cfg, token)
     except SystemExit as e:
         return finish(False, f"取坐标失败：{e}")
-
-    if args.dry_run:
-        log(f"[dry-run] 不实际提交（坐标 {lng}, {lat}）")
-        return finish(True, f"[dry-run] 未实际提交（坐标 {lng}, {lat}）")
 
     ok = do_signin(sess, cfg, token, lng, lat)
     summary = (f"签到成功（坐标 {lng}, {lat}）" if ok
