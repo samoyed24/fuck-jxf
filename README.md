@@ -66,7 +66,7 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 > 这是 GitHub 的官方行为：*"Workflows don't run in forked repositories by default."*
 > 参考 [Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)。
 
-启用后建议先手动跑一次确认能跑通（见下文「手动触发」）。
+启用后建议先手动执行一次以确认配置无误（见下文「手动触发」）。
 
 ### 3. 配置 Secrets
 
@@ -96,15 +96,19 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 
 | Secret 名称 | 默认 | 说明 |
 |---|---|---|
-| `JXF_MAIL_NOTIFY_SUCCESS` | `false` | 签到成功时是否发邮件 |
+| `JXF_MAIL_NOTIFY_SUCCESS` | `true` | 签到成功时是否发邮件 |
 | `JXF_MAIL_NOTIFY_FAILURE` | `true` | 签到失败时是否发邮件 |
 | `JXF_MAIL_PORT` | `465` | SMTP 端口，使用 SSL |
 
 布尔值接受 `true/false`、`yes/no`、`1/0`、`on/off`（不区分大小写）。
 **写错会直接报错退出**，不会静默取默认值。
 
-> 默认只在**失败时**发邮件 —— 签到成功是常态，每周收一封成功邮件意义不大。
-> 如果你希望每次都有回执，把 `JXF_MAIL_NOTIFY_SUCCESS` 设为 `true`。
+> **默认成功和失败均发送邮件。** 成功邮件同时充当**心跳信号** ——
+> 若某周未收到，说明任务未执行（如 workflow 被停用、凭据失效），
+> 相比仅发送失败通知，更易察觉此类静默故障。
+>
+> 若不需要成功通知，可将 `JXF_MAIL_NOTIFY_SUCCESS` 设为 `false`，
+> 仅保留失败通知。
 
 **授权码怎么拿**：以 QQ 邮箱为例，设置 → 账户 → 开启 SMTP 服务 →
 生成授权码。163 邮箱类似。**注意授权码不是邮箱登录密码。**
@@ -203,7 +207,7 @@ python signin.py --dry-run  # 走完整流程但不提交
 ## 配置项
 
 本地写在 `.env`，CI 里配在 GitHub Secrets —— **变量名完全一致**，
-所以本地跑通即代表 CI 能跑通。
+所以本地验证通过即代表 CI 可正常运行。
 
 **必填**
 
@@ -221,7 +225,7 @@ python signin.py --dry-run  # 走完整流程但不提交
 | `JXF_MAIL_PASSWORD` | — | 邮箱授权码 |
 | `JXF_MAIL_TO` | — | 收件邮箱 |
 | `JXF_MAIL_PORT` | `465` | SMTP 端口（SSL） |
-| `JXF_MAIL_NOTIFY_SUCCESS` | `false` | 成功时是否发邮件 |
+| `JXF_MAIL_NOTIFY_SUCCESS` | `true` | 成功时是否发邮件 |
 | `JXF_MAIL_NOTIFY_FAILURE` | `true` | 失败时是否发邮件 |
 
 坐标**不需要配置**，脚本自动复用最近一次成功签到的坐标。
@@ -261,11 +265,14 @@ A: 按可能性排查：
 
 **Q: 没收到通知邮件？**
 A: 依次检查：
-1. `JXF_MAIL_NOTIFY_SUCCESS` 默认为 `false`，成功时本来就不发信
-2. 四个必填项（HOST/USER/PASSWORD/TO）是否都配了，缺一个会直接报错
-3. `JXF_MAIL_PASSWORD` 填的是**授权码**还是登录密码 —— 必须是授权码
-4. 收件箱的垃圾邮件目录
-5. Actions 日志里搜「邮件」看是否有发送失败的提示
+1. 四个必填项（HOST/USER/PASSWORD/TO）是否都配了 —— **一个都没配时不会发邮件**，
+   缺一部分则直接报错
+2. `JXF_MAIL_PASSWORD` 填的是**授权码**还是登录密码 —— 必须是授权码
+3. 收件箱的垃圾邮件目录
+4. Actions 日志里搜「邮件」看是否有发送失败的提示
+
+> 反之，**若此前持续收到成功邮件、其后中断**，说明任务未在执行 ——
+> 请检查 Actions 页面中 workflow 是否被停用。这是成功邮件的一项附加价值。
 
 **Q: 验证码识别失败？**
 A: 脚本默认重试 6 次（每次重新获取验证码）。若持续失败，可能是验证码机制变更，需要调整 OCR 逻辑。

@@ -148,8 +148,10 @@ def load_config() -> dict:
     cfg.setdefault("request_timeout", 15)
 
     # 邮件通知开关：默认「失败时发、成功时不发」，避免每周收到无意义邮件
+    # 默认两个都发：成功邮件同时充当心跳信号 —— 若某周没收到，
+    # 说明任务没跑（如 workflow 被停用、凭据失效），可据此察觉静默故障。
     cfg["notify_success"] = _parse_bool(
-        cfg.get("notify_success", "false"), "JXF_MAIL_NOTIFY_SUCCESS")
+        cfg.get("notify_success", "true"), "JXF_MAIL_NOTIFY_SUCCESS")
     cfg["notify_failure"] = _parse_bool(
         cfg.get("notify_failure", "true"), "JXF_MAIL_NOTIFY_FAILURE")
 
