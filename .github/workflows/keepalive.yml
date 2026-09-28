@@ -1,0 +1,91 @@
+name: 保活
+
+# 防止定时 workflow 因仓库长期无 commit 被 GitHub 自动停用。
+#
+# 背景：GitHub 官方文档称
+#   "In a public repository, scheduled workflows are automatically disabled
+#    when no repository activity has occurred in 60 days."
+# 官方未定义 "repository activity" 是什么。但多方实践证据指向 commit：
+#   - 该规则在 Actions 页面显示的原文是
+#     "no activity in this repository for at least 60 days"
+#   - 常见 keepalive 方案的文档均表述为 "if there is no commit ... 60 days"
+#   - GitHub Community #184653 中，fork 了上千仓库的用户采用的方案是推 commit
+#
+# 本 workflow 用「定时推一个 commit」制造活动，从而重置 60 天计时器。
+#
+# 为什么这能自我维持：
+#   本 workflow 自身也是 scheduled workflow，同样受该规则约束。
+#   但只要执行间隔 < 60 天，它每次运行都会推一个 commit，
+#   这个 commit 就重置了整个仓库的计时器 —— 包括它自己的。
+#   因此 30 天的间隔（2 倍余量）可以无限自我维持。
+#
+# 注：下方还有一个 API 修复步骤，用于处理「仓库已被停用」的情况。
+#     真正起预防作用的是 commit，API 那步只是补救。
+
+on:
+  schedule:
+    # 每月 1 日 UTC 03:00（北京时间 11:00）
+    # 30 天间隔 << 60 天阈值，留足冗余
+    - cron: '0 3 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 推 commit 所必需
+  actions: write    # 调用 enable API 所必需
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true   # 让后续 git push 可认证
+
+      - name: 推一个保活 commit
+        run: |
+          set -euo pipefail
+
+          # 写入当前时间戳，确保内容每次都变（否则 git commit 会因无改动而失败）
+          date -u +'%Y-%m-%dT%H:%M:%SZ' > .keepalive
+
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          git add .keepalive
+          if git diff --staged --quiet; then
+            echo "无改动，跳过提交"
+            exit 0
+          fi
+
+          git commit -m "chore: keepalive $(date -u +%Y-%m-%d)"
+          git push
+          echo "✓ 已提交保活 commit"
+          echo "  （用 GITHUB_TOKEN 推送，不会触发其他 workflow —— GitHub 有意设计）"
+
+      - name: 修复已被停用的 workflow（补救）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          workflows=$(gh api "repos/$REPO/actions/workflows" \
+            --jq '.workflows[] | "\(.id)\t\(.state)\t\(.path)"')
+
+          [ -z "$workflows" ] && { echo "未找到 workflow"; exit 0; }
+
+          fixed=0
+          while IFS=$'\t' read -r id state path; do
+            case "$state" in
+              active|deleted) ;;
+              disabled_inactivity|disabled_manually|disabled_fork)
+                echo "  [$state] $path → 重新启用"
+                gh api --method PUT \
+                  "repos/$REPO/actions/workflows/$id/enable" >/dev/null
+                fixed=$((fixed + 1)) ;;
+              *) echo "  [$state] $path → 跳过（未知状态）" ;;
+            esac
+          done <<< "$workflows"
+
+          echo "已重新启用 $fixed 个 workflow"
