@@ -123,55 +123,15 @@ on:
 
 每次运行的结果会写入 **Actions 运行详情页的 Summary**（签到日志最后 20 行）。
 
-### 7. ⚠️ 定时任务可能因仓库无活动而被停用
+### 7. 保活（keepalive）
 
-GitHub 官方文档原文：
+GitHub 会在仓库 60 天没有活动时自动停用定时任务。签到仓库平时不会有
+commit，所以会触发这条规则。
 
-> "In a public repository, scheduled workflows are automatically disabled when no
-> repository activity has occurred in 60 days."
->
-> 参考 [Disabling and enabling a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/disable-and-enable-workflows)
+仓库内的 `.github/workflows/keepalive.yml` 会**每 30 天自动提交一次
+commit**，让仓库保持活动状态，避免定时任务被停用。
 
-注意这句话里两个**官方没有说清**的点：
-
-1. **只写了 public repository。** 私有仓库是否适用，官方文档未提及。
-   （有第三方资料称私有仓库同样适用，但**未获官方证实**，请不要假定私有仓库绝对安全。）
-2. **「repository activity」未定义。** 官方没说定时运行本身算不算活动。
-   多方实践证据指向「只有新 commit 才重置计时器」，但**未获官方证实**。
-
-**这对本项目影响很大**：签到仓库不会有日常 commit，如果确实只认 commit，
-那这个仓库从建好那天起就在倒计时，60 天后静默停用 —— **不会有任何报错**，
-只是某周开始不再签到。
-
-#### 本仓库的对策：`keepalive.yml`
-
-仓库内已包含 `.github/workflows/keepalive.yml`，**每月 1 日自动推一个
-保活 commit**，重置 60 天计时器。
-
-它能自我维持的原因：该 workflow 自身也受此规则约束，但它每次运行推的
-commit 重置的是**整个仓库**的计时器，包括它自己。间隔设为 30 天，
-对 60 天阈值留 2 倍余量。
-
-该 workflow 还会顺带检查是否有 workflow 处于 `disabled_inactivity` 状态，
-若有则调 API 重新启用（此端点对该状态是否有效**未经证实**，故仅作补救）。
-
-> **Fork 后请确认 `keepalive.yml` 也被启用**，否则签到仍会在 60 天后静默停止。
-
-#### 如果你删掉了 keepalive
-
-**发现停用后怎么办**：去 **Actions** 页面，若 workflow 被标记为 disabled，
-点 **Enable workflow** 即可恢复。页面会显示横幅：
-*"This scheduled workflow is disabled because there hasn't been activity in this
-repository for at least 60 days."*
-
-**手动规避办法**：
-
-1. 定期（每 1-2 个月）往仓库提交一次任意改动
-2. 把仓库设为 private —— **效果存疑**，见上文第 1 点
-
-> 另外建议：给签到加个**外部提醒**（比如手机日历每月提醒一次去 Actions 页面看一眼）。
-> 这类静默失效没有通知，只能靠主动检查发现 —— keepalive 也可能因为
-> 仓库被归档、Actions 被禁用等原因失效。
+> Fork 后请确认 `keepalive.yml` 也处于启用状态。
 
 ---
 
@@ -249,7 +209,7 @@ A: workflow 里已包含 `apt-get install libgl1 libglib2.0-0`，若仍报错请
 
 **Q: 定时任务没按时执行？**
 A: 按可能性排查：
-1. **workflow 被自动停用**（最常见）—— 去 Actions 页面看是否有 disabled 横幅，点 Enable 恢复。详见上文「7. 定时任务可能因仓库无活动而被停用」。
+1. **workflow 被自动停用**（最常见）—— 去 Actions 页面看是否有 disabled 横幅，点 Enable 恢复。详见上文「7. 保活」。
 2. **Fork 仓库的 Actions 未启用** —— 见上文「2. 启用 Actions」。
 3. **cron 延迟** —— GitHub Actions 在平台高负载时会延迟，通常数分钟内，偶尔更久。这是平台特性，无法从代码层面解决。
 
