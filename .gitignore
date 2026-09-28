@@ -1,0 +1,13 @@
+# 凭据 —— 绝不提交
+.env
+.env.*
+!.env.example
+signin.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 临时文件
+sample_captcha.png
