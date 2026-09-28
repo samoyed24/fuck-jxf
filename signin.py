@@ -33,9 +33,10 @@ import os
 import re
 import smtplib
 import sys
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import ddddocr
 import requests
@@ -48,6 +49,22 @@ LOG = HERE / "signin.log"
 
 # 加载 .env（本地）；CI 里文件不存在，直接用已注入的环境变量
 load_dotenv(ENV_FILE)
+
+# 签到以北京时间划分自然日。
+# 不能用 date.today()：GitHub Actions runner 的本地时区是 UTC，
+# 若 cron 落在北京时间 08:00 之前，runner 的"今天"会比用户认知的早一天，
+# 导致查询错日期 —— 可能误判「今天已签到」而跳过，或重复签到。
+TZ = ZoneInfo("Asia/Shanghai")
+
+
+def now() -> datetime:
+    """当前北京时间（时区感知）。"""
+    return datetime.now(TZ)
+
+
+def today_str() -> str:
+    """北京时间的今天，YYYY-MM-DD。"""
+    return now().date().isoformat()
 
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -72,7 +89,7 @@ def ocr() -> ddddocr.DdddOcr:
 
 
 def log(msg: str) -> None:
-    line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}"
+    line = f"[{now():%Y-%m-%d %H:%M:%S}] {msg}"
     print(line, flush=True)
     try:                                   # CI 里工作目录可能只读
         with LOG.open("a", encoding="utf-8") as f:
@@ -201,7 +218,7 @@ def notify(cfg: dict, ok: bool, summary: str) -> None:
     subject = f"{icon} 签到{'成功' if ok else '失败'} — {cfg['username']}"
     body = (
         f"账号：{cfg['username']}\n"
-        f"时间：{datetime.now():%Y-%m-%d %H:%M:%S}\n"
+        f"时间：{now():%Y-%m-%d %H:%M:%S}（北京时间）\n"
         f"结果：{summary}\n"
     )
     send_mail(cfg, subject, body)
@@ -310,8 +327,8 @@ def resolve_coords(sess: requests.Session, cfg: dict,
 
     区间查询而非只看今天 —— CI 在清晨跑，当天通常还没有记录。
     """
-    begin = (date.today() - timedelta(days=LOOKBACK_DAYS)).isoformat()
-    end = date.today().isoformat()
+    begin = (now().date() - timedelta(days=LOOKBACK_DAYS)).isoformat()
+    end = today_str()
     recs = fetch_records(sess, cfg, token, begin, end)
 
     if recs:
@@ -378,7 +395,7 @@ def main() -> int:
     if not token:
         return finish(False, "登录失败（验证码重试用尽或账号密码错误）")
 
-    today = date.today().isoformat()
+    today = today_str()
     recs = fetch_records(sess, cfg, token, today, today)
     log(f"今天已有 {len(recs)} 条签到记录")
     for rec in recs:
