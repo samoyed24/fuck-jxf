@@ -20,9 +20,11 @@ fuck-jxf — 自动登录 + 验证码识别 + 签到
   只复用「最近一次成功签到」的坐标，保证每次完全一致。
   若近 30 天内无签到记录，脚本报错退出，需先手动签到一次。
 
-邮件通知：
-  通过 JXF_MAIL_* 系列变量配置，可分别控制成功/失败时是否发送。
-  邮件发送失败不会影响签到结果。
+通知通道（可选，可同时启用）：
+  1. SMTP 邮件    —— JXF_MAIL_* 系列
+  2. Portcloud Notify（HTTP API）—— JXF_PC_* 系列
+  何时通知由 JXF_NOTIFY_SUCCESS / JXF_NOTIFY_FAILURE 控制，与通道无关。
+  通知发送失败不会影响签到结果。
 """
 from __future__ import annotations
 
@@ -132,13 +134,16 @@ def load_config() -> dict:
     for env_key, cfg_key in (
         ("JXF_USERNAME", "username"),
         ("JXF_PASSWORD", "password"),
+        # 邮件通道（SMTP）
         ("JXF_MAIL_HOST", "mail_host"),
         ("JXF_MAIL_PORT", "mail_port"),
         ("JXF_MAIL_USER", "mail_user"),
         ("JXF_MAIL_PASSWORD", "mail_password"),
         ("JXF_MAIL_TO", "mail_to"),
-        ("JXF_MAIL_NOTIFY_SUCCESS", "notify_success"),
-        ("JXF_MAIL_NOTIFY_FAILURE", "notify_failure"),
+        # Portcloud Notify 通道（HTTP API）
+        ("JXF_PC_KEY", "pc_key"),
+        ("JXF_PC_TO", "pc_to"),
+        ("JXF_PC_URL", "pc_url"),
     ):
         val = os.environ.get(env_key)
         if val:
@@ -147,13 +152,16 @@ def load_config() -> dict:
     cfg.setdefault("captcha_retries", 6)
     cfg.setdefault("request_timeout", 15)
 
-    # 邮件通知开关：默认「失败时发、成功时不发」，避免每周收到无意义邮件
-    # 默认两个都发：成功邮件同时充当心跳信号 —— 若某周没收到，
+    # 通知开关：与通道无关，控制「何时通知」。
+    # 优先读新的通用名，回退到旧的 JXF_MAIL_* 以兼容既有配置。
+    # 默认两个都发：成功通知同时充当心跳信号 —— 若某周未收到，
     # 说明任务没跑（如 workflow 被停用、凭据失效），可据此察觉静默故障。
-    cfg["notify_success"] = _parse_bool(
-        cfg.get("notify_success", "true"), "JXF_MAIL_NOTIFY_SUCCESS")
-    cfg["notify_failure"] = _parse_bool(
-        cfg.get("notify_failure", "true"), "JXF_MAIL_NOTIFY_FAILURE")
+    raw_success = (os.environ.get("JXF_NOTIFY_SUCCESS")
+                   or os.environ.get("JXF_MAIL_NOTIFY_SUCCESS") or "true")
+    raw_failure = (os.environ.get("JXF_NOTIFY_FAILURE")
+                   or os.environ.get("JXF_MAIL_NOTIFY_FAILURE") or "true")
+    cfg["notify_success"] = _parse_bool(raw_success, "JXF_NOTIFY_SUCCESS")
+    cfg["notify_failure"] = _parse_bool(raw_failure, "JXF_NOTIFY_FAILURE")
 
     # 端口
     if cfg.get("mail_port"):
@@ -165,7 +173,8 @@ def load_config() -> dict:
     else:
         cfg["mail_port"] = 465
 
-    # 邮件配置完整性校验：要么全配，要么全不配
+    # --- 通道 1：SMTP 邮件 ---
+    # 要么全配，要么全不配
     mail_keys = ("mail_host", "mail_user", "mail_password", "mail_to")
     present = [k for k in mail_keys if cfg.get(k)]
     if present and len(present) != len(mail_keys):
@@ -173,9 +182,24 @@ def load_config() -> dict:
         raise SystemExit(
             "邮件配置不完整。缺少：" + "、".join(missing) + "\n"
             "  需要同时配置 JXF_MAIL_HOST / JXF_MAIL_USER / "
-            "JXF_MAIL_PASSWORD / JXF_MAIL_TO，或全部留空以禁用邮件通知"
+            "JXF_MAIL_PASSWORD / JXF_MAIL_TO，或全部留空以禁用该通道"
         )
     cfg["mail_enabled"] = bool(present)
+
+    # --- 通道 2：Portcloud Notify ---
+    cfg.setdefault("pc_url", "https://notify.portcloud.online")
+    cfg["pc_url"] = cfg["pc_url"].rstrip("/")
+    # key 与 to 必须成对出现
+    if bool(cfg.get("pc_key")) != bool(cfg.get("pc_to")):
+        missing = "JXF_PC_TO" if cfg.get("pc_key") else "JXF_PC_KEY"
+        raise SystemExit(
+            f"Portcloud Notify 配置不完整，缺少：{missing}\n"
+            "  需要同时配置 JXF_PC_KEY / JXF_PC_TO，或全部留空以禁用该通道"
+        )
+    cfg["pc_enabled"] = bool(cfg.get("pc_key") and cfg.get("pc_to"))
+
+    if not (cfg["mail_enabled"] or cfg["pc_enabled"]):
+        log("未配置任何通知通道，仅输出日志")
 
     if not cfg.get("username") or not cfg.get("password"):
         raise SystemExit(
@@ -185,13 +209,10 @@ def load_config() -> dict:
     return cfg
 
 
-# ---------------------------------------------------------------- 邮件通知
+# ---------------------------------------------------------------- 通知
 
-def send_mail(cfg: dict, subject: str, body: str) -> None:
-    """发送通知邮件。失败只记录，不影响签到结果。"""
-    if not cfg.get("mail_enabled"):
-        return
-
+def send_mail(cfg: dict, subject: str, body: str) -> bool:
+    """通过 SMTP 发送通知。失败只记录，不影响签到结果。"""
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = cfg["mail_user"]
@@ -204,13 +225,57 @@ def send_mail(cfg: dict, subject: str, body: str) -> None:
             s.login(cfg["mail_user"], cfg["mail_password"])
             s.send_message(msg)
         log(f"  邮件已发送 → {cfg['mail_to']}")
+        return True
     except Exception as e:
         # 通知失败不应让整个任务失败 —— 签到本身可能已经成功
         log(f"  邮件发送失败: {e}")
+        return False
+
+
+def send_portcloud(cfg: dict, subject: str, body: str) -> bool:
+    """
+    通过 Portcloud Notify 发送通知。
+
+    该服务把业务失败表达为 HTTP 200 + success:false，因此不能只看状态码，
+    必须解析响应体。429/503 是真正的传输层失败。
+    """
+    url = f"{cfg['pc_url']}/api/v1/send"
+    payload = {"to": cfg["pc_to"], "subject": subject, "text": body}
+    try:
+        r = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {cfg['pc_key']}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=cfg["request_timeout"],
+        )
+    except Exception as e:
+        log(f"  Portcloud 请求异常: {e}")
+        return False
+
+    # 先尝试解析结构化错误
+    try:
+        d = r.json()
+    except Exception:
+        log(f"  Portcloud 返回非 JSON（HTTP {r.status_code}）：{r.text[:200]}")
+        return False
+
+    if d.get("success") is True:
+        log(f"  Portcloud 已发送 → {cfg['pc_to']}"
+            f"（message_id={d.get('message_id')}）")
+        return True
+
+    err = d.get("error") or {}
+    code = err.get("code") or f"HTTP_{r.status_code}"
+    msg = err.get("message") or r.text[:200]
+    log(f"  Portcloud 发送失败: {code} — {msg}")
+    return False
 
 
 def notify(cfg: dict, ok: bool, summary: str) -> None:
-    """按配置决定是否发送通知。"""
+    """按配置决定是否发送通知，并向所有已启用的通道投递。"""
     if ok and not cfg["notify_success"]:
         return
     if not ok and not cfg["notify_failure"]:
@@ -223,7 +288,11 @@ def notify(cfg: dict, ok: bool, summary: str) -> None:
         f"时间：{now():%Y-%m-%d %H:%M:%S}（北京时间）\n"
         f"结果：{summary}\n"
     )
-    send_mail(cfg, subject, body)
+
+    if cfg.get("mail_enabled"):
+        send_mail(cfg, subject, body)
+    if cfg.get("pc_enabled"):
+        send_portcloud(cfg, subject, body)
 
 
 # ---------------------------------------------------------------- 验证码
