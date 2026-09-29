@@ -81,9 +81,25 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 | `JXF_USERNAME` | 登录账号（学号） |
 | `JXF_PASSWORD` | 登录密码 |
 
-**可选：邮件通知**
+**可选：通知开关**（与通道无关，控制「何时通知」）
 
-不配置则不发邮件。要启用需**同时配置**下面四项，缺一不可（配置不完整会直接报错退出）：
+| Secret 名称 | 默认 | 说明 |
+|---|---|---|
+| `JXF_NOTIFY_SUCCESS` | `true` | 签到成功时是否通知 |
+| `JXF_NOTIFY_FAILURE` | `true` | 签到失败时是否通知 |
+
+布尔值接受 `true/false`、`yes/no`、`1/0`、`on/off`（不区分大小写）。
+**写错会直接报错退出**，不会静默取默认值。
+
+> **默认成功和失败均发送通知。** 成功通知同时充当**心跳信号** ——
+> 若某周未收到，说明任务未执行（如 workflow 被停用、凭据失效），
+> 相比仅发送失败通知，更易察觉此类静默故障。
+>
+> 若不需要成功通知，可将 `JXF_NOTIFY_SUCCESS` 设为 `false`。
+
+**可选：通知通道 1 —— SMTP 邮件**
+
+需**同时配置**下面四项，缺一不可（配置不完整会直接报错退出）：
 
 | Secret 名称 | 说明 |
 |---|---|
@@ -91,27 +107,22 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 | `JXF_MAIL_USER` | 发件邮箱 |
 | `JXF_MAIL_PASSWORD` | 邮箱**授权码**（不是登录密码） |
 | `JXF_MAIL_TO` | 收件邮箱 |
-
-**可选：通知开关**
-
-| Secret 名称 | 默认 | 说明 |
-|---|---|---|
-| `JXF_MAIL_NOTIFY_SUCCESS` | `true` | 签到成功时是否发邮件 |
-| `JXF_MAIL_NOTIFY_FAILURE` | `true` | 签到失败时是否发邮件 |
-| `JXF_MAIL_PORT` | `465` | SMTP 端口，使用 SSL |
-
-布尔值接受 `true/false`、`yes/no`、`1/0`、`on/off`（不区分大小写）。
-**写错会直接报错退出**，不会静默取默认值。
-
-> **默认成功和失败均发送邮件。** 成功邮件同时充当**心跳信号** ——
-> 若某周未收到，说明任务未执行（如 workflow 被停用、凭据失效），
-> 相比仅发送失败通知，更易察觉此类静默故障。
->
-> 若不需要成功通知，可将 `JXF_MAIL_NOTIFY_SUCCESS` 设为 `false`，
-> 仅保留失败通知。
+| `JXF_MAIL_PORT` | SMTP 端口，默认 `465`（SSL） |
 
 **授权码怎么拿**：以 QQ 邮箱为例，设置 → 账户 → 开启 SMTP 服务 →
 生成授权码。163 邮箱类似。**注意授权码不是邮箱登录密码。**
+
+**可选：通知通道 2 —— Portcloud Notify**
+
+需**同时配置**下面两项：
+
+| Secret 名称 | 说明 |
+|---|---|
+| `JXF_PC_KEY` | API Key，在 [notify.portcloud.online](https://notify.portcloud.online) 控制台创建，形如 `pck_xxx` |
+| `JXF_PC_TO` | 收件邮箱（需先在控制台「Recipients」中添加并**验证**） |
+| `JXF_PC_URL` | API 地址，默认 `https://notify.portcloud.online` |
+
+**两个通道可同时启用**，通知会同时投递到两者。都不配置则仅输出日志。
 
 > **坐标无需配置。** 脚本会自动复用最近一次成功签到的坐标，
 > 以保证每次提交的位置完全一致。
@@ -231,7 +242,17 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 | `JXF_USERNAME` | 登录账号（学号） |
 | `JXF_PASSWORD` | 登录密码 |
 
-**可选：邮件通知**（不配置则不发邮件）
+**可选：通知开关**（与通道无关）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `JXF_NOTIFY_SUCCESS` | `true` | 成功时是否通知 |
+| `JXF_NOTIFY_FAILURE` | `true` | 失败时是否通知 |
+
+> 旧名 `JXF_MAIL_NOTIFY_SUCCESS` / `JXF_MAIL_NOTIFY_FAILURE` 仍兼容，
+> 但新名优先。
+
+**可选：通道 1 —— SMTP 邮件**
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -240,8 +261,16 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 | `JXF_MAIL_PASSWORD` | — | 邮箱授权码 |
 | `JXF_MAIL_TO` | — | 收件邮箱 |
 | `JXF_MAIL_PORT` | `465` | SMTP 端口（SSL） |
-| `JXF_MAIL_NOTIFY_SUCCESS` | `true` | 成功时是否发邮件 |
-| `JXF_MAIL_NOTIFY_FAILURE` | `true` | 失败时是否发邮件 |
+
+**可选：通道 2 —— Portcloud Notify**
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `JXF_PC_KEY` | — | API Key，形如 `pck_xxx` |
+| `JXF_PC_TO` | — | 收件邮箱（需预先验证） |
+| `JXF_PC_URL` | `https://notify.portcloud.online` | API 地址 |
+
+两个通道可同时启用。都不配置则仅输出日志。
 
 坐标**不需要配置**，脚本自动复用最近一次成功签到的坐标。
 

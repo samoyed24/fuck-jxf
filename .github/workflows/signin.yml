@@ -38,14 +38,19 @@ jobs:
         env:
           JXF_USERNAME: ${{ secrets.JXF_USERNAME }}
           JXF_PASSWORD: ${{ secrets.JXF_PASSWORD }}
-          # 邮件通知（可选）：不配置则不发邮件
+          # 通知开关（与通道无关）
+          JXF_NOTIFY_SUCCESS: ${{ secrets.JXF_NOTIFY_SUCCESS }}
+          JXF_NOTIFY_FAILURE: ${{ secrets.JXF_NOTIFY_FAILURE }}
+          # 通道 1：SMTP 邮件（可选）
           JXF_MAIL_HOST: ${{ secrets.JXF_MAIL_HOST }}
           JXF_MAIL_PORT: ${{ secrets.JXF_MAIL_PORT }}
           JXF_MAIL_USER: ${{ secrets.JXF_MAIL_USER }}
           JXF_MAIL_PASSWORD: ${{ secrets.JXF_MAIL_PASSWORD }}
           JXF_MAIL_TO: ${{ secrets.JXF_MAIL_TO }}
-          JXF_MAIL_NOTIFY_SUCCESS: ${{ secrets.JXF_MAIL_NOTIFY_SUCCESS }}
-          JXF_MAIL_NOTIFY_FAILURE: ${{ secrets.JXF_MAIL_NOTIFY_FAILURE }}
+          # 通道 2：Portcloud Notify（可选）
+          JXF_PC_KEY: ${{ secrets.JXF_PC_KEY }}
+          JXF_PC_TO: ${{ secrets.JXF_PC_TO }}
+          JXF_PC_URL: ${{ secrets.JXF_PC_URL }}
         run: |
           python signin.py ${{ inputs.dry_run && '--dry-run' || '' }}
 
