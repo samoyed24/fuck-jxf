@@ -437,6 +437,8 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 | `.github/workflows/keepalive.yml` | 保活，防定时任务被自动停用（每月 1 日） |
 | `signin.log` | 运行日志（已被 gitignore） |
 | `.keepalive` | 保活时间戳，由 keepalive.yml 自动更新 |
+| `LICENSE` | WTFPL v2 |
+| `docs/` | README 中引用的操作截图 |
 
 ---
 
@@ -489,3 +491,9 @@ A: 脚本默认重试 6 次（每次重新获取验证码）。若持续失败�
 - **贡献代码** —— 欢迎通过 [Pull Request](https://github.com/samoyed24/fuck-jxf/pulls) 提交。
 
 > 汇报前请先确认问题可复现，并**移除日志中的账号、密码、坐标等个人信息**。
+
+---
+
+## 许可证
+
+[WTFPL v2](LICENSE) —— Do What The Fuck You Want To Public License。
