@@ -223,14 +223,14 @@ on:
 **Actions → 自动签到 → Run workflow**，可勾选「只走流程不实际提交」
 （对应 `--dry-run`）先验证配置：
 
-![手动触发](docs/run-manually-2.png)
+![手动触发](docs/run-manually-1.png)
 
 ### 6. 查看结果
 
 每次运行的结果会写入 **Actions 运行详情页的 Summary**（签到日志最后 20 行）。
 点开某次运行即可看到完整日志：
 
-![运行日志](docs/run-manually-1.png)
+![运行日志](docs/run-manually-2.png)
 
 ### 7. 保活（keepalive）
 
