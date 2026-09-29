@@ -114,6 +114,18 @@ def headers(token: str | None = None, json_body: bool = False) -> dict[str, str]
 
 # ---------------------------------------------------------------- 配置
 
+def _env_or(key: str, default: str = "") -> str:
+    """
+    读环境变量，空串视同未设置。
+
+    不能直接用 os.environ.get(key, default)：GitHub Actions 会把未配置的
+    secret 注入为空串，键是存在的，.get 的默认值不会生效，空串会一路传到
+    解析层报错。故这里显式把空串折叠为默认值。
+    """
+    val = os.environ.get(key)
+    return val if val else default
+
+
 def _parse_bool(raw: str, env_key: str) -> bool:
     """严格解析布尔值。无法识别时显式失败，不静默取默认值。"""
     v = raw.strip().lower()
@@ -155,20 +167,20 @@ def load_config() -> dict:
     # 总开关：设为 false 时即使满足条件也跳过打卡。
     # 用途：临时停用（如放假、实习结束）而不必删除 secrets 或禁用 workflow。
     cfg["enabled"] = _parse_bool(
-        os.environ.get("JXF_ENABLED", "true"), "JXF_ENABLED")
+        _env_or("JXF_ENABLED", "true"), "JXF_ENABLED")
 
     # 通知开关：与通道无关，控制「何时通知」。
     # 优先读新的通用名，回退到旧的 JXF_MAIL_* 以兼容既有配置。
     # 默认都发：成功通知同时充当心跳信号 —— 若某周未收到，
     # 说明任务没跑（如 workflow 被停用、凭据失效），可据此察觉静默故障。
-    raw_success = (os.environ.get("JXF_NOTIFY_SUCCESS")
-                   or os.environ.get("JXF_MAIL_NOTIFY_SUCCESS") or "true")
-    raw_failure = (os.environ.get("JXF_NOTIFY_FAILURE")
-                   or os.environ.get("JXF_MAIL_NOTIFY_FAILURE") or "true")
+    raw_success = (_env_or("JXF_NOTIFY_SUCCESS")
+                   or _env_or("JXF_MAIL_NOTIFY_SUCCESS") or "true")
+    raw_failure = (_env_or("JXF_NOTIFY_FAILURE")
+                   or _env_or("JXF_MAIL_NOTIFY_FAILURE") or "true")
     cfg["notify_success"] = _parse_bool(raw_success, "JXF_NOTIFY_SUCCESS")
     cfg["notify_failure"] = _parse_bool(raw_failure, "JXF_NOTIFY_FAILURE")
     cfg["notify_skipped"] = _parse_bool(
-        os.environ.get("JXF_NOTIFY_SKIPPED", "true"), "JXF_NOTIFY_SKIPPED")
+        _env_or("JXF_NOTIFY_SKIPPED", "true"), "JXF_NOTIFY_SKIPPED")
 
     # 端口
     if cfg.get("mail_port"):
