@@ -242,6 +242,86 @@ commit**，让仓库保持活动状态，避免定时任务被停用。
 
 > Fork 后请确认 `keepalive.yml` 也处于启用状态。
 
+### 8. 上游有更新时，同步到你的 fork
+
+Fork 之后，本仓库的更新**不会自动同步**到你的 fork。想用上新版本，
+需要手动同步一次。
+
+#### 方法一：网页操作（推荐）
+
+进入**你 fork 的仓库**首页，仓库名下方会显示与上游的差异，
+例如 *"This branch is 3 commits behind samoyed24:main"*。
+点击右侧的 **Sync fork** 下拉菜单，再点 **Update branch**：
+
+```
+┌─────────────────────────────────────────────┐
+│  This branch is 3 commits behind ...        │
+│                          [ Sync fork ▾ ]    │
+└─────────────────────────────────────────────┘
+```
+
+同步后再确认 workflow 是否仍处于启用状态（见第 2 节）——
+有时同步会重置该状态。
+
+#### 方法二：命令行
+
+```bash
+cd fuck-jxf
+
+# 首次需要添加上游仓库（只需做一次）
+git remote add upstream https://github.com/samoyed24/fuck-jxf.git
+
+# 拉取上游更新并合并
+git fetch upstream
+git checkout main
+git merge upstream/main
+
+# 推送到你自己的 fork
+git push origin main
+```
+
+#### ⚠️ 如果你改过打卡时间
+
+第 4 节提到，修改打卡时间需要编辑 `.github/workflows/signin.yml` 里的
+cron 表达式。**一旦你改过，同步时就可能产生冲突** —— 因为上游的同名
+文件也有改动，Git 无法自动决定保留哪份。
+
+网页端此时会给出多个选项，**不要点 "Discard commits"** ——
+那会丢弃你的全部本地提交，改动无法找回：
+
+| 选项 | 含义 |
+|---|---|
+| **Update branch** | 能自动合并时出现，正常同步 |
+| **Discard N commits** | ⚠️ **丢弃你的改动**，慎点 |
+| **Open pull request** | 有冲突时出现，走 PR 流程手动解决 |
+
+**方式 A：放弃自己的改动**（最省事）
+
+若只是改了打卡时间，可以直接接受上游版本，同步后**重新改一次**。
+不建议点 "Discard commits"（会丢全部提交），更稳的做法是命令行操作：
+
+```bash
+git fetch upstream
+git checkout main
+git reset --hard upstream/main    # 丢弃本地全部改动
+git push --force origin main
+```
+
+**方式 B：保留自己的改动**（命令行）
+
+```bash
+git fetch upstream
+git merge upstream/main
+# 若提示 signin.yml 冲突，手动编辑该文件解决
+# 解决后：
+git add .github/workflows/signin.yml
+git commit
+git push origin main
+```
+
+> 建议：如果只是想改时间，改完后在 commit message 里写清楚，
+> 下次同步时更容易识别出是哪处改动导致的冲突。
+
 ---
 
 ## 二、本地运行
