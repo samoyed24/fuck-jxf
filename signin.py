@@ -386,16 +386,24 @@ def main() -> int:
     # 每次运行只通知一次。中途若已发送，结束时不再重复。
     sent = {"done": False}
 
-    def finish(ok: bool, summary: str) -> int:
+    def finish(ok: bool, summary: str, fatal: bool = False) -> int:
+        """
+        ok    —— 业务结果，决定发成功通知还是失败通知
+        fatal —— 脚本自身是否失败（登录不上、取不到坐标等），决定退出码
+
+        退出码只反映脚本能否完成流程，不反映签到结果。业务结果通过
+        邮件通知传达，因此「已签到」「被服务端拒绝」等都不算失败。
+        """
         if not sent["done"]:
             sent["done"] = True
             notify(cfg, ok, summary)
-        return 0 if ok else 1
+        return 1 if fatal else 0
 
     sess = requests.Session()
     token = login(sess, cfg)
     if not token:
-        return finish(False, "登录失败（验证码重试用尽或账号密码错误）")
+        return finish(False, "登录失败（验证码重试用尽或账号密码错误）",
+                      fatal=True)
 
     today = today_str()
     recs = fetch_records(sess, cfg, token, today, today)
@@ -412,17 +420,17 @@ def main() -> int:
         try:
             lng, lat = resolve_coords(sess, cfg, token)
         except SystemExit as e:
-            return finish(False, f"取坐标失败：{e}")
+            return finish(False, f"取坐标失败：{e}", fatal=True)
         log(f"[dry-run] 今天已有 {len(recs)} 条记录，"
             f"将提交坐标 ({lng}, {lat})，但不实际提交")
         return finish(True, f"[dry-run] 未实际提交（坐标 {lng}, {lat}）")
 
-    # 预检查：今天已有记录时不提交，并返回失败。
+    # 预检查：今天已有记录时不提交。
     #
-    # 返回失败而非成功，是因为脚本此时并未执行任何签到动作 ——
-    # 报成功会造成「显示成功但实际未签到」的静默失败。
-    # 已有记录是否有效（是否被服务端认定、是否 isWarning）无法从此接口判定，
-    # 需人工核实，故以失败告警。要强制提交用 --force。
+    # 业务上视为失败（发失败通知），因为脚本未执行签到动作，且已有记录
+    # 是否被服务端认定无法由此接口判定，需人工核实。
+    # 但退出码仍为 0 —— 脚本本身正常完成了流程，退出码不表达业务结果。
+    # 要强制提交用 --force。
     if recs and not args.force:
         log(f"今天已有 {len(recs)} 条签到记录：")
         for rec in recs:
@@ -439,7 +447,7 @@ def main() -> int:
     try:
         lng, lat = resolve_coords(sess, cfg, token)
     except SystemExit as e:
-        return finish(False, f"取坐标失败：{e}")
+        return finish(False, f"取坐标失败：{e}", fatal=True)
 
     ok = do_signin(sess, cfg, token, lng, lat)
     summary = (f"签到成功（坐标 {lng}, {lat}）" if ok
