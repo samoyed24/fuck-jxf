@@ -52,6 +52,12 @@ CI/CD 定时任务等知识点。**它不应该被运行，尤其不应该被用
 
 点击本仓库右上角的 **Fork**，把它复制到你自己的账号下。
 
+![点击 Fork 按钮](docs/fork-1.png)
+
+在跳转的页面确认仓库名后点 **Create fork**：
+
+![创建 fork](docs/fork-2.png)
+
 > **为什么必须 Fork，而不是直接用本仓库？**
 > 定时任务需要读取 `JXF_USERNAME` / `JXF_PASSWORD` 两个 secrets，
 > 而 secrets 只能配置在**你自己拥有写权限的仓库**里。
@@ -60,19 +66,41 @@ CI/CD 定时任务等知识点。**它不应该被运行，尤其不应该被用
 ### 2. 启用 Actions（关键，容易漏）
 
 Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任务不会执行。
-进入你 fork 出来的仓库，点 **Actions** 标签页，若看到提示则点击
+进入你 fork 出来的仓库，点 **Actions** 标签页，点击
 **I understand my workflows, go ahead and enable them**。
+
+![启用 Actions](docs/action-1.png)
 
 > 这是 GitHub 的官方行为：*"Workflows don't run in forked repositories by default."*
 > 参考 [Events that trigger workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)。
+
+**两个 workflow 都需要单独启用。** 启用 Actions 后，点进每个 workflow，
+若顶部出现黄色横幅，点击右侧 **Enable workflow**：
+
+签到任务：
+
+![启用签到 workflow](docs/action-3.png)
+
+保活任务：
+
+![启用保活 workflow](docs/action-2.png)
 
 启用后建议先手动执行一次以确认配置无误（见下文「手动触发」）。
 
 ### 3. 配置 Secrets
 
 进入**你 fork 的仓库**，点
-**Settings → Secrets and variables → Actions → New repository secret**，
-添加以下 secrets：
+**Settings → Secrets and variables → Actions → New repository secret**：
+
+![进入 Secrets 设置](docs/secret-3.png)
+
+![点击 New repository secret](docs/secret-2.png)
+
+填写名称与值，点 **Add secret**：
+
+![填写 secret](docs/secret-1.png)
+
+按下面的清单逐个添加：
 
 **必填**
 
@@ -106,14 +134,29 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 GitHub 账号是否已 Star，否则调用返回 `403 STAR_REQUIRED`。
 
 登录控制台后，页面会提示需要 Star 并给出仓库链接（未 Star 时界面上会有
-「去 Star」的引导按钮），按提示操作即可。
+「去 Star」的引导按钮），按提示操作即可。仓库页面的 Star 按钮：
+
+![给仓库点 Star](docs/notify-1.png)
 
 配置步骤：
 
-1. 用 GitHub 登录 [notify.portcloud.online](https://notify.portcloud.online) 控制台
-2. 在 **Recipients** 中添加收件邮箱并完成验证（**未验证的地址收不到邮件**）
-3. 在 **API Keys** 中创建 Key，复制形如 `pck_xxx` 的明文
-4. 填入以下 secrets：
+**1.** 用 GitHub 登录 [notify.portcloud.online](https://notify.portcloud.online) 控制台
+
+**2.** 在 **接收邮箱** 中添加收件邮箱并完成验证：
+
+![添加接收邮箱](docs/notify-2.png)
+
+> 只有通过验证的地址才能接收邮件。
+
+**3.** 在 **API Key** 中创建 Key：
+
+![创建 API Key](docs/notify-3.png)
+
+> 明文**只展示一次**，请立即复制保存。
+
+**4.** 填入以下 secrets：
+
+![填写 Portcloud 相关 secret](docs/notify-4.png)
 
 | Secret 名称 | 说明 |
 |---|---|
@@ -177,11 +220,17 @@ on:
 
 ### 5. 手动触发
 
-**Actions → 自动签到 → Run workflow**，可勾选 `dry_run` 只走流程不实际提交。
+**Actions → 自动签到 → Run workflow**，可勾选「只走流程不实际提交」
+（对应 `--dry-run`）先验证配置：
+
+![手动触发](docs/run-manually-2.png)
 
 ### 6. 查看结果
 
 每次运行的结果会写入 **Actions 运行详情页的 Summary**（签到日志最后 20 行）。
+点开某次运行即可看到完整日志：
+
+![运行日志](docs/run-manually-1.png)
 
 ### 7. 保活（keepalive）
 
@@ -350,3 +399,13 @@ A: 这是预检查生效，不是故障。脚本发现当天已有签到记录�
 
 **Q: 验证码识别失败？**
 A: 脚本默认重试 6 次（每次重新获取验证码）。若持续失败，可能是验证码机制变更，需要调整 OCR 逻辑。
+
+---
+
+## 反馈与贡献
+
+- **发现 BUG** —— 欢迎通过 [Issue](https://github.com/samoyed24/fuck-jxf/issues) 汇报，
+  请附上运行日志（`signin.log` 或 Actions 的 Summary）以便定位。
+- **贡献代码** —— 欢迎通过 [Pull Request](https://github.com/samoyed24/fuck-jxf/pulls) 提交。
+
+> 汇报前请先确认问题可复现，并**移除日志中的账号、密码、坐标等个人信息**。

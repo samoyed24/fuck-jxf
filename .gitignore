@@ -11,3 +11,6 @@ __pycache__/
 
 # 临时文件
 sample_captcha.png
+
+# macOS
+.DS_Store
