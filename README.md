@@ -130,17 +130,27 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 | `JXF_USERNAME` | 登录账号（学号） |
 | `JXF_PASSWORD` | 登录密码 |
 
+**可选：总开关**
+
+| Secret 名称 | 默认 | 说明 |
+|---|---|---|
+| `JXF_ENABLED` | `true` | 设为 `false` 时，即使满足条件也**跳过打卡** |
+
+用途：临时停用（放假、实习结束等），无需删除 secrets 或禁用 workflow。
+跳过时仍会发送通知（见下方 `JXF_NOTIFY_SKIPPED`）。
+
 **可选：通知开关**（与通道无关，控制「何时通知」）
 
 | Secret 名称 | 默认 | 说明 |
 |---|---|---|
 | `JXF_NOTIFY_SUCCESS` | `true` | 签到成功时是否通知 |
 | `JXF_NOTIFY_FAILURE` | `true` | 签到失败时是否通知 |
+| `JXF_NOTIFY_SKIPPED` | `true` | **跳过打卡**时是否通知 |
 
 布尔值接受 `true/false`、`yes/no`、`1/0`、`on/off`（不区分大小写）。
 **写错会直接报错退出**，不会静默取默认值。
 
-> **默认成功和失败均发送通知。** 成功通知同时充当**心跳信号** ——
+> **默认三项均发送通知。** 成功通知同时充当**心跳信号** ——
 > 若某周未收到，说明任务未执行（如 workflow 被停用、凭据失效），
 > 相比仅发送失败通知，更易察觉此类静默故障。
 >
@@ -407,12 +417,19 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 | `JXF_USERNAME` | 登录账号（学号） |
 | `JXF_PASSWORD` | 登录密码 |
 
+**可选：总开关**
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `JXF_ENABLED` | `true` | 设为 `false` 时跳过打卡 |
+
 **可选：通知开关**（与通道无关）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `JXF_NOTIFY_SUCCESS` | `true` | 成功时是否通知 |
 | `JXF_NOTIFY_FAILURE` | `true` | 失败时是否通知 |
+| `JXF_NOTIFY_SKIPPED` | `true` | 跳过打卡时是否通知 |
 
 > 旧名 `JXF_MAIL_NOTIFY_SUCCESS` / `JXF_MAIL_NOTIFY_FAILURE` 仍兼容，
 > 但新名优先。
@@ -499,6 +516,13 @@ A: 这是预检查生效，不是故障。脚本发现当天已有签到记录�
 
 > 默认每周定时执行时不会遇到此情况。若频繁出现，说明当天被重复触发
 > （如同时配置了本地 launchd 和 GitHub Actions）。
+
+**Q: 怎么临时停止打卡？**
+A: 把 `JXF_ENABLED` 设为 `false`。此时脚本不登录、不查记录、不提交，
+直接跳过并发送「跳过」通知（由 `JXF_NOTIFY_SKIPPED` 控制）。
+
+适合放假、实习结束等场景 —— 不必删除 secrets，也不必禁用 workflow，
+恢复时改回 `true` 即可。
 
 **Q: 验证码识别失败？**
 A: 脚本默认重试 6 次（每次重新获取验证码）。若持续失败，可能是验证码机制变更，需要调整 OCR 逻辑。

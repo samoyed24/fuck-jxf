@@ -38,9 +38,12 @@ jobs:
         env:
           JXF_USERNAME: ${{ secrets.JXF_USERNAME }}
           JXF_PASSWORD: ${{ secrets.JXF_PASSWORD }}
+          # 总开关：设为 false 则跳过打卡
+          JXF_ENABLED: ${{ secrets.JXF_ENABLED }}
           # 通知开关（与通道无关）
           JXF_NOTIFY_SUCCESS: ${{ secrets.JXF_NOTIFY_SUCCESS }}
           JXF_NOTIFY_FAILURE: ${{ secrets.JXF_NOTIFY_FAILURE }}
+          JXF_NOTIFY_SKIPPED: ${{ secrets.JXF_NOTIFY_SKIPPED }}
           # 通道 1：SMTP 邮件（可选）
           JXF_MAIL_HOST: ${{ secrets.JXF_MAIL_HOST }}
           JXF_MAIL_PORT: ${{ secrets.JXF_MAIL_PORT }}

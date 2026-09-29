@@ -152,9 +152,14 @@ def load_config() -> dict:
     cfg.setdefault("captcha_retries", 6)
     cfg.setdefault("request_timeout", 15)
 
+    # 总开关：设为 false 时即使满足条件也跳过打卡。
+    # 用途：临时停用（如放假、实习结束）而不必删除 secrets 或禁用 workflow。
+    cfg["enabled"] = _parse_bool(
+        os.environ.get("JXF_ENABLED", "true"), "JXF_ENABLED")
+
     # 通知开关：与通道无关，控制「何时通知」。
     # 优先读新的通用名，回退到旧的 JXF_MAIL_* 以兼容既有配置。
-    # 默认两个都发：成功通知同时充当心跳信号 —— 若某周未收到，
+    # 默认都发：成功通知同时充当心跳信号 —— 若某周未收到，
     # 说明任务没跑（如 workflow 被停用、凭据失效），可据此察觉静默故障。
     raw_success = (os.environ.get("JXF_NOTIFY_SUCCESS")
                    or os.environ.get("JXF_MAIL_NOTIFY_SUCCESS") or "true")
@@ -162,6 +167,8 @@ def load_config() -> dict:
                    or os.environ.get("JXF_MAIL_NOTIFY_FAILURE") or "true")
     cfg["notify_success"] = _parse_bool(raw_success, "JXF_NOTIFY_SUCCESS")
     cfg["notify_failure"] = _parse_bool(raw_failure, "JXF_NOTIFY_FAILURE")
+    cfg["notify_skipped"] = _parse_bool(
+        os.environ.get("JXF_NOTIFY_SKIPPED", "true"), "JXF_NOTIFY_SKIPPED")
 
     # 端口
     if cfg.get("mail_port"):
@@ -274,20 +281,52 @@ def send_portcloud(cfg: dict, subject: str, body: str) -> bool:
     return False
 
 
-def notify(cfg: dict, ok: bool, summary: str) -> None:
-    """按配置决定是否发送通知，并向所有已启用的通道投递。"""
-    if ok and not cfg["notify_success"]:
-        return
-    if not ok and not cfg["notify_failure"]:
+# 通知状态
+ST_SUCCESS = "success"
+ST_FAILURE = "failure"
+ST_SKIPPED = "skipped"
+
+# 各状态的图标、标题词、对应开关名
+_STATUS_META = {
+    ST_SUCCESS: ("✓", "成功", "notify_success"),
+    ST_FAILURE: ("✗", "失败", "notify_failure"),
+    ST_SKIPPED: ("⏸", "跳过", "notify_skipped"),
+}
+
+# 跳过打卡时的补充说明：告知后续操作，避免用户误以为任务故障
+_SKIPPED_NOTE = """
+签到已跳过，本次未执行任何打卡操作。
+
+如需恢复签到：
+  1. 将 Secret 中的 JXF_ENABLED 改回 true
+  2. 恢复后会在下次计划时间自动执行
+     如需立即签到，可手动触发：Actions → 自动签到 → Run workflow
+
+如因请假暂停：
+  请及时在系统内提交请假申请
+
+如已放假、无需签到：
+  可将 Secret 中的 JXF_NOTIFY_SKIPPED 设为 false，关闭本通知
+"""
+
+
+def notify(cfg: dict, status: str, summary: str) -> None:
+    """按配置决定是否发送通知，并向所有已启用的通道投递。
+
+    status 为 ST_SUCCESS / ST_FAILURE / ST_SKIPPED 之一。
+    """
+    icon, word, switch = _STATUS_META[status]
+    if not cfg[switch]:
         return
 
-    icon = "✓" if ok else "✗"
-    subject = f"{icon} 签到{'成功' if ok else '失败'} — {cfg['username']}"
+    subject = f"{icon} 签到{word} — {cfg['username']}"
     body = (
         f"账号：{cfg['username']}\n"
         f"时间：{now():%Y-%m-%d %H:%M:%S}（北京时间）\n"
         f"结果：{summary}\n"
     )
+    if status == ST_SKIPPED:
+        body += _SKIPPED_NOTE
 
     if cfg.get("mail_enabled"):
         send_mail(cfg, subject, body)
@@ -455,23 +494,28 @@ def main() -> int:
     # 每次运行只通知一次。中途若已发送，结束时不再重复。
     sent = {"done": False}
 
-    def finish(ok: bool, summary: str, fatal: bool = False) -> int:
+    def finish(status: str, summary: str, fatal: bool = False) -> int:
         """
-        ok    —— 业务结果，决定发成功通知还是失败通知
-        fatal —— 脚本自身是否失败（登录不上、取不到坐标等），决定退出码
+        status —— ST_SUCCESS / ST_FAILURE / ST_SKIPPED，决定发哪类通知
+        fatal  —— 脚本自身是否失败（登录不上、取不到坐标等），决定退出码
 
         退出码只反映脚本能否完成流程，不反映签到结果。业务结果通过
-        邮件通知传达，因此「已签到」「被服务端拒绝」等都不算失败。
+        通知传达，因此「已签到」「被服务端拒绝」等都不算失败。
         """
         if not sent["done"]:
             sent["done"] = True
-            notify(cfg, ok, summary)
+            notify(cfg, status, summary)
         return 1 if fatal else 0
+
+    # 总开关：关闭时直接跳过，不登录、不查记录，也不做任何提交。
+    if not cfg["enabled"]:
+        log("JXF_ENABLED=false，跳过本次打卡")
+        return finish(ST_SKIPPED, "已在配置中停用（JXF_ENABLED=false）")
 
     sess = requests.Session()
     token = login(sess, cfg)
     if not token:
-        return finish(False, "登录失败（验证码重试用尽或账号密码错误）",
+        return finish(ST_FAILURE, "登录失败（验证码重试用尽或账号密码错误）",
                       fatal=True)
 
     today = today_str()
@@ -482,17 +526,17 @@ def main() -> int:
         for rec in recs:
             log(f"  id={rec.get('id')} 坐标=({rec.get('lng')}, {rec.get('lat')}) "
                 f"地址={rec.get('address')} 时间={rec.get('createdAt')}")
-        return finish(True, f"仅查询状态，今天已有 {len(recs)} 条签到记录")
+        return finish(ST_SUCCESS, f"仅查询状态，今天已有 {len(recs)} 条签到记录")
 
     # dry-run 只观察不提交，不受预检查影响 —— 它本就不打算真的签到。
     if args.dry_run:
         try:
             lng, lat = resolve_coords(sess, cfg, token)
         except SystemExit as e:
-            return finish(False, f"取坐标失败：{e}", fatal=True)
+            return finish(ST_FAILURE, f"取坐标失败：{e}", fatal=True)
         log(f"[dry-run] 今天已有 {len(recs)} 条记录，"
             f"将提交坐标 ({lng}, {lat})，但不实际提交")
-        return finish(True, f"[dry-run] 未实际提交（坐标 {lng}, {lat}）")
+        return finish(ST_SUCCESS, f"[dry-run] 未实际提交（坐标 {lng}, {lat}）")
 
     # 预检查：今天已有记录时不提交。
     #
@@ -508,7 +552,7 @@ def main() -> int:
                 f"isWarning={rec.get('isWarning')}")
         log("未提交签到（已有记录，无法确认其是否有效）")
         return finish(
-            False,
+            ST_FAILURE,
             f"今天已有 {len(recs)} 条记录，未提交。"
             "请自行核实该记录是否有效，或加 --force 强制提交"
         )
@@ -516,12 +560,13 @@ def main() -> int:
     try:
         lng, lat = resolve_coords(sess, cfg, token)
     except SystemExit as e:
-        return finish(False, f"取坐标失败：{e}", fatal=True)
+        return finish(ST_FAILURE, f"取坐标失败：{e}", fatal=True)
 
     ok = do_signin(sess, cfg, token, lng, lat)
+    status = ST_SUCCESS if ok else ST_FAILURE
     summary = (f"签到成功（坐标 {lng}, {lat}）" if ok
                else "签到失败，请查看运行日志")
-    return finish(ok, summary)
+    return finish(status, summary)
 
 
 if __name__ == "__main__":
