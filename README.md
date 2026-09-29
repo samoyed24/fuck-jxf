@@ -97,9 +97,34 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 >
 > 若不需要成功通知，可将 `JXF_NOTIFY_SUCCESS` 设为 `false`。
 
-**可选：通知通道 1 —— SMTP 邮件**
+**可选：通知通道 1 —— Portcloud Notify（推荐）**
 
-需**同时配置**下面四项，缺一不可（配置不完整会直接报错退出）：
+自己配置 SMTP 服务器比较麻烦（要开服务、申请授权码、处理各种服务商的
+限制），建议直接用这个现成的托管服务。免费，几步就能用起来。
+
+**使用前需要先给该服务的 GitHub 仓库点一个 Star** —— 服务端会校验你的
+GitHub 账号是否已 Star，否则调用返回 `403 STAR_REQUIRED`。
+
+登录控制台后，页面会提示需要 Star 并给出仓库链接（未 Star 时界面上会有
+「去 Star」的引导按钮），按提示操作即可。
+
+配置步骤：
+
+1. 用 GitHub 登录 [notify.portcloud.online](https://notify.portcloud.online) 控制台
+2. 在 **Recipients** 中添加收件邮箱并完成验证（**未验证的地址收不到邮件**）
+3. 在 **API Keys** 中创建 Key，复制形如 `pck_xxx` 的明文
+4. 填入以下 secrets：
+
+| Secret 名称 | 说明 |
+|---|---|
+| `JXF_PC_KEY` | API Key，形如 `pck_xxx` |
+| `JXF_PC_TO` | 收件邮箱（须与上一步验证过的地址一致） |
+| `JXF_PC_URL` | API 地址，默认 `https://notify.portcloud.online`，一般不用填 |
+
+**可选：通知通道 2 —— SMTP 邮件**
+
+适合已有邮箱、且不想依赖第三方服务的场景。需**同时配置**下面四项，
+缺一不可（配置不完整会直接报错退出）：
 
 | Secret 名称 | 说明 |
 |---|---|
@@ -111,16 +136,6 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 
 **授权码怎么拿**：以 QQ 邮箱为例，设置 → 账户 → 开启 SMTP 服务 →
 生成授权码。163 邮箱类似。**注意授权码不是邮箱登录密码。**
-
-**可选：通知通道 2 —— Portcloud Notify**
-
-需**同时配置**下面两项：
-
-| Secret 名称 | 说明 |
-|---|---|
-| `JXF_PC_KEY` | API Key，在 [notify.portcloud.online](https://notify.portcloud.online) 控制台创建，形如 `pck_xxx` |
-| `JXF_PC_TO` | 收件邮箱（需先在控制台「Recipients」中添加并**验证**） |
-| `JXF_PC_URL` | API 地址，默认 `https://notify.portcloud.online` |
 
 **两个通道可同时启用**，通知会同时投递到两者。都不配置则仅输出日志。
 
@@ -252,7 +267,18 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 > 旧名 `JXF_MAIL_NOTIFY_SUCCESS` / `JXF_MAIL_NOTIFY_FAILURE` 仍兼容，
 > 但新名优先。
 
-**可选：通道 1 —— SMTP 邮件**
+**可选：通道 1 —— Portcloud Notify（推荐）**
+
+需先给该服务的 GitHub 仓库点 Star（控制台内会给出链接），
+否则返回 `403 STAR_REQUIRED`。
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `JXF_PC_KEY` | — | API Key，形如 `pck_xxx` |
+| `JXF_PC_TO` | — | 收件邮箱（需预先验证） |
+| `JXF_PC_URL` | `https://notify.portcloud.online` | API 地址 |
+
+**可选：通道 2 —— SMTP 邮件**
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
@@ -261,14 +287,6 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 | `JXF_MAIL_PASSWORD` | — | 邮箱授权码 |
 | `JXF_MAIL_TO` | — | 收件邮箱 |
 | `JXF_MAIL_PORT` | `465` | SMTP 端口（SSL） |
-
-**可选：通道 2 —— Portcloud Notify**
-
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `JXF_PC_KEY` | — | API Key，形如 `pck_xxx` |
-| `JXF_PC_TO` | — | 收件邮箱（需预先验证） |
-| `JXF_PC_URL` | `https://notify.portcloud.online` | API 地址 |
 
 两个通道可同时启用。都不配置则仅输出日志。
 
