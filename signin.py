@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import json
 import os
 import re
@@ -230,13 +231,20 @@ def load_config() -> dict:
 
 # ---------------------------------------------------------------- 通知
 
-def send_mail(cfg: dict, subject: str, body: str) -> bool:
-    """通过 SMTP 发送通知。失败只记录，不影响签到结果。"""
+def send_mail(cfg: dict, subject: str, text: str, html_body: str) -> bool:
+    """
+    通过 SMTP 发送通知。失败只记录，不影响签到结果。
+
+    同时提供 text 与 html 两个版本：邮件客户端支持 HTML 时渲染 html，
+    不支持时（或用户设置为纯文本）回退到 text。这是 MIME multipart/alternative
+    的标准用法，比只发 HTML 更稳妥。
+    """
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = cfg["mail_user"]
     msg["To"] = cfg["mail_to"]
-    msg.set_content(body)
+    msg.set_content(text)                      # 纯文本版本（降级用）
+    msg.add_alternative(html_body, subtype="html")   # HTML 版本
 
     try:
         with smtplib.SMTP_SSL(cfg["mail_host"], cfg["mail_port"],
@@ -251,15 +259,18 @@ def send_mail(cfg: dict, subject: str, body: str) -> bool:
         return False
 
 
-def send_portcloud(cfg: dict, subject: str, body: str) -> bool:
+def send_portcloud(cfg: dict, subject: str, text: str, html_body: str) -> bool:
     """
     通过 Portcloud Notify 发送通知。
 
-    该服务把业务失败表达为 HTTP 200 + success:false，因此不能只看状态码，
-    必须解析响应体。429/503 是真正的传输层失败。
+    该接口支持 text 与 html 两个字段，同时提供以便客户端择优渲染。
+
+    注意该服务把业务失败表达为 HTTP 200 + success:false，因此不能只看
+    状态码，必须解析响应体。429/503 是真正的传输层失败。
     """
     url = f"{cfg['pc_url']}/api/v1/send"
-    payload = {"to": cfg["pc_to"], "subject": subject, "text": body}
+    payload = {"to": cfg["pc_to"], "subject": subject,
+               "text": text, "html": html_body}
     try:
         r = requests.post(
             url,
@@ -298,11 +309,11 @@ ST_SUCCESS = "success"
 ST_FAILURE = "failure"
 ST_SKIPPED = "skipped"
 
-# 各状态的图标、标题词、对应开关名
+# 各状态的图标、标题词、对应开关名、主题色
 _STATUS_META = {
-    ST_SUCCESS: ("✓", "成功", "notify_success"),
-    ST_FAILURE: ("✗", "失败", "notify_failure"),
-    ST_SKIPPED: ("⏸", "跳过", "notify_skipped"),
+    ST_SUCCESS: ("✓", "成功", "notify_success", "#16a34a"),
+    ST_FAILURE: ("✗", "失败", "notify_failure", "#dc2626"),
+    ST_SKIPPED: ("⏭️", "跳过", "notify_skipped", "#d97706"),
 }
 
 # 跳过打卡时的补充说明：告知后续操作，避免用户误以为任务故障
@@ -321,29 +332,124 @@ _SKIPPED_NOTE = """
   可将 Secret 中的 JXF_NOTIFY_SKIPPED 设为 false，关闭本通知
 """
 
+# 跳过说明的结构化版本，供 HTML 渲染使用：(标题, [条目...])
+_SKIPPED_SECTIONS = [
+    ("如需恢复签到", [
+        "将 Secret 中的 <code>JXF_ENABLED</code> 改回 <code>true</code>",
+        "恢复后会在下次计划时间自动执行；"
+        "如需立即签到，可手动触发 Actions → 自动签到 → Run workflow",
+    ]),
+    ("如因请假暂停", ["请及时在系统内提交请假申请"]),
+    ("如已放假、无需签到",
+     ["可将 Secret 中的 <code>JXF_NOTIFY_SKIPPED</code> 设为 "
+      "<code>false</code>，关闭本通知"]),
+]
+
+
+def _render_html(icon: str, word: str, color: str, username: str,
+                 timestamp: str, summary: str, skipped: bool) -> str:
+    """
+    生成 HTML 版通知。
+
+    邮件客户端限制较多，故遵循以下约束：
+      - 全部使用内联样式（Gmail 等会剥离 <style> 块）
+      - 不引用外部图片与字体（会被默认拦截）
+      - 用 table 布局，兼容 Outlook 等对 CSS 支持较弱的客户端
+      - 宽度上限 600px，与主流邮件客户端一致
+    """
+    esc = html.escape
+    note = ""
+    if skipped:
+        blocks = []
+        for title, items in _SKIPPED_SECTIONS:
+            lis = "".join(
+                f'<li style="margin:0 0 6px 0;padding:0;line-height:1.6;">'
+                f'{it}</li>' for it in items)
+            blocks.append(
+                f'<p style="margin:0 0 6px 0;font-size:14px;font-weight:600;'
+                f'color:#111827;">{esc(title)}</p>'
+                f'<ul style="margin:0 0 16px 0;padding-left:20px;'
+                f'font-size:14px;color:#374151;">{lis}</ul>')
+        note = (
+            '<div style="margin:20px 0 0 0;padding:16px;background:#f9fafb;'
+            'border-left:3px solid #d1d5db;border-radius:2px;">'
+            f'<p style="margin:0 0 12px 0;font-size:14px;color:#374151;'
+            f'line-height:1.6;">签到已跳过，本次未执行任何打卡操作。</p>'
+            + "".join(blocks) +
+            '</div>')
+
+    return f"""\
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="margin:0;padding:0;background:#f3f4f6;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" \
+style="background:#f3f4f6;padding:24px 12px;">
+<tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" \
+style="max-width:600px;width:100%;background:#ffffff;border-radius:6px;\
+overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',\
+'PingFang SC','Microsoft YaHei',sans-serif;">
+
+  <tr><td style="padding:20px 24px;border-bottom:1px solid #e5e7eb;">
+    <span style="font-size:18px;font-weight:600;color:{color};">\
+{icon} 签到{esc(word)}</span>
+  </td></tr>
+
+  <tr><td style="padding:24px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" \
+style="font-size:14px;color:#374151;">
+      <tr>
+        <td style="padding:0 0 10px 0;width:72px;color:#6b7280;">账号</td>
+        <td style="padding:0 0 10px 0;">{esc(username)}</td>
+      </tr>
+      <tr>
+        <td style="padding:0 0 10px 0;color:#6b7280;">时间</td>
+        <td style="padding:0 0 10px 0;">{esc(timestamp)}（北京时间）</td>
+      </tr>
+      <tr>
+        <td style="padding:0;color:#6b7280;vertical-align:top;">结果</td>
+        <td style="padding:0;line-height:1.6;">{esc(summary)}</td>
+      </tr>
+    </table>
+    {note}
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body></html>
+"""
+
 
 def notify(cfg: dict, status: str, summary: str) -> None:
     """按配置决定是否发送通知，并向所有已启用的通道投递。
 
     status 为 ST_SUCCESS / ST_FAILURE / ST_SKIPPED 之一。
     """
-    icon, word, switch = _STATUS_META[status]
+    icon, word, switch, color = _STATUS_META[status]
     if not cfg[switch]:
         return
 
+    ts = f"{now():%Y-%m-%d %H:%M:%S}"
     subject = f"{icon} 签到{word} — {cfg['username']}"
-    body = (
-        f"账号：{cfg['username']}\n"
-        f"时间：{now():%Y-%m-%d %H:%M:%S}（北京时间）\n"
-        f"结果：{summary}\n"
-    )
+
+    # 纯文本版（邮件降级用，也是 Portcloud 的 text 字段）
+    text = (f"账号：{cfg['username']}\n"
+            f"时间：{ts}（北京时间）\n"
+            f"结果：{summary}\n")
     if status == ST_SKIPPED:
-        body += _SKIPPED_NOTE
+        text += _SKIPPED_NOTE
+
+    html_body = _render_html(icon, word, color, cfg["username"], ts,
+                             summary, status == ST_SKIPPED)
 
     if cfg.get("mail_enabled"):
-        send_mail(cfg, subject, body)
+        send_mail(cfg, subject, text, html_body)
     if cfg.get("pc_enabled"):
-        send_portcloud(cfg, subject, body)
+        send_portcloud(cfg, subject, text, html_body)
 
 
 # ---------------------------------------------------------------- 验证码
