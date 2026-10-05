@@ -165,11 +165,6 @@ def load_config() -> dict:
     cfg.setdefault("captcha_retries", 6)
     cfg.setdefault("request_timeout", 15)
 
-    # 总开关：设为 false 时即使满足条件也跳过打卡。
-    # 用途：临时停用（如放假、实习结束）而不必删除 secrets 或禁用 workflow。
-    cfg["enabled"] = _parse_bool(
-        _env_or("JXF_ENABLED", "true"), "JXF_ENABLED")
-
     # 通知开关：与通道无关，控制「何时通知」。
     # 优先读新的通用名，回退到旧的 JXF_MAIL_* 以兼容既有配置。
     # 默认都发：成功通知同时充当心跳信号 —— 若某周未收到，
@@ -180,8 +175,6 @@ def load_config() -> dict:
                    or _env_or("JXF_MAIL_NOTIFY_FAILURE") or "true")
     cfg["notify_success"] = _parse_bool(raw_success, "JXF_NOTIFY_SUCCESS")
     cfg["notify_failure"] = _parse_bool(raw_failure, "JXF_NOTIFY_FAILURE")
-    cfg["notify_skipped"] = _parse_bool(
-        _env_or("JXF_NOTIFY_SKIPPED", "true"), "JXF_NOTIFY_SKIPPED")
 
     # 端口
     if cfg.get("mail_port"):
@@ -265,8 +258,8 @@ def send_portcloud(cfg: dict, subject: str, text: str, html_body: str) -> bool:
 
     该接口支持 text 与 html 两个字段，同时提供以便客户端择优渲染。
 
-    注意该服务把业务失败表达为 HTTP 200 + success:false，因此不能只看
-    状态码，必须解析响应体。429/503 是真正的传输层失败。
+    HTTP 201 + log_id 表示请求已受理，实际投递由服务端异步完成。
+    此处不轮询投递状态，受理成功即可返回。
     """
     url = f"{cfg['pc_url']}/api/v1/send"
     payload = {"to": cfg["pc_to"], "subject": subject,
@@ -292,12 +285,22 @@ def send_portcloud(cfg: dict, subject: str, text: str, html_body: str) -> bool:
         log(f"  Portcloud 返回非 JSON（HTTP {r.status_code}）：{r.text[:200]}")
         return False
 
-    if d.get("success") is True:
-        log(f"  Portcloud 已发送 → {cfg['pc_to']}"
-            f"（message_id={d.get('message_id')}）")
+    if not isinstance(d, dict):
+        log(f"  Portcloud 响应格式异常（HTTP {r.status_code}）：{r.text[:200]}")
+        return False
+
+    if r.status_code == 201:
+        log_id = d.get("log_id")
+        if type(log_id) is not int or log_id <= 0:
+            log("  Portcloud 受理响应缺少有效 log_id，投递结果未确认")
+            return False
+        log(f"  Portcloud 已受理 → {cfg['pc_to']}"
+            f"（log_id={log_id}，异步投递，不查询结果）")
         return True
 
     err = d.get("error") or {}
+    if not isinstance(err, dict):
+        err = {}
     code = err.get("code") or f"HTTP_{r.status_code}"
     msg = err.get("message") or r.text[:200]
     log(f"  Portcloud 发送失败: {code} — {msg}")
@@ -307,47 +310,16 @@ def send_portcloud(cfg: dict, subject: str, text: str, html_body: str) -> bool:
 # 通知状态
 ST_SUCCESS = "success"
 ST_FAILURE = "failure"
-ST_SKIPPED = "skipped"
 
 # 各状态的图标、标题词、对应开关名、主题色
 _STATUS_META = {
     ST_SUCCESS: ("✓", "成功", "notify_success", "#16a34a"),
     ST_FAILURE: ("✗", "失败", "notify_failure", "#dc2626"),
-    ST_SKIPPED: ("⏭️", "跳过", "notify_skipped", "#d97706"),
 }
-
-# 跳过打卡时的补充说明：告知后续操作，避免用户误以为任务故障
-_SKIPPED_NOTE = """
-签到已跳过，本次未执行任何打卡操作。
-
-如需恢复签到：
-  1. 将 Secret 中的 JXF_ENABLED 改回 true
-  2. 恢复后会在下次计划时间自动执行
-     如需立即签到，可手动触发：Actions → 自动签到 → Run workflow
-
-如因请假暂停：
-  请及时在系统内提交请假申请
-
-如已放假、无需签到：
-  可将 Secret 中的 JXF_NOTIFY_SKIPPED 设为 false，关闭本通知
-"""
-
-# 跳过说明的结构化版本，供 HTML 渲染使用：(标题, [条目...])
-_SKIPPED_SECTIONS = [
-    ("如需恢复签到", [
-        "将 Secret 中的 <code>JXF_ENABLED</code> 改回 <code>true</code>",
-        "恢复后会在下次计划时间自动执行；"
-        "如需立即签到，可手动触发 Actions → 自动签到 → Run workflow",
-    ]),
-    ("如因请假暂停", ["请及时在系统内提交请假申请"]),
-    ("如已放假、无需签到",
-     ["可将 Secret 中的 <code>JXF_NOTIFY_SKIPPED</code> 设为 "
-      "<code>false</code>，关闭本通知"]),
-]
 
 
 def _render_html(icon: str, word: str, color: str, username: str,
-                 timestamp: str, summary: str, skipped: bool) -> str:
+                 timestamp: str, summary: str) -> str:
     """
     生成 HTML 版通知。
 
@@ -358,25 +330,6 @@ def _render_html(icon: str, word: str, color: str, username: str,
       - 宽度上限 600px，与主流邮件客户端一致
     """
     esc = html.escape
-    note = ""
-    if skipped:
-        blocks = []
-        for title, items in _SKIPPED_SECTIONS:
-            lis = "".join(
-                f'<li style="margin:0 0 6px 0;padding:0;line-height:1.6;">'
-                f'{it}</li>' for it in items)
-            blocks.append(
-                f'<p style="margin:0 0 6px 0;font-size:14px;font-weight:600;'
-                f'color:#111827;">{esc(title)}</p>'
-                f'<ul style="margin:0 0 16px 0;padding-left:20px;'
-                f'font-size:14px;color:#374151;">{lis}</ul>')
-        note = (
-            '<div style="margin:20px 0 0 0;padding:16px;background:#f9fafb;'
-            'border-left:3px solid #d1d5db;border-radius:2px;">'
-            f'<p style="margin:0 0 12px 0;font-size:14px;color:#374151;'
-            f'line-height:1.6;">签到已跳过，本次未执行任何打卡操作。</p>'
-            + "".join(blocks) +
-            '</div>')
 
     return f"""\
 <!DOCTYPE html>
@@ -414,7 +367,6 @@ style="font-size:14px;color:#374151;">
         <td style="padding:0;line-height:1.6;">{esc(summary)}</td>
       </tr>
     </table>
-    {note}
   </td></tr>
 
 </table>
@@ -427,7 +379,7 @@ style="font-size:14px;color:#374151;">
 def notify(cfg: dict, status: str, summary: str) -> None:
     """按配置决定是否发送通知，并向所有已启用的通道投递。
 
-    status 为 ST_SUCCESS / ST_FAILURE / ST_SKIPPED 之一。
+    status 为 ST_SUCCESS / ST_FAILURE 之一。
     """
     icon, word, switch, color = _STATUS_META[status]
     if not cfg[switch]:
@@ -440,11 +392,8 @@ def notify(cfg: dict, status: str, summary: str) -> None:
     text = (f"账号：{cfg['username']}\n"
             f"时间：{ts}（北京时间）\n"
             f"结果：{summary}\n")
-    if status == ST_SKIPPED:
-        text += _SKIPPED_NOTE
 
-    html_body = _render_html(icon, word, color, cfg["username"], ts,
-                             summary, status == ST_SKIPPED)
+    html_body = _render_html(icon, word, color, cfg["username"], ts, summary)
 
     if cfg.get("mail_enabled"):
         send_mail(cfg, subject, text, html_body)
@@ -545,6 +494,41 @@ def fetch_records(sess: requests.Session, cfg: dict, token: str,
         return []
 
 
+def fetch_trips(sess: requests.Session, cfg: dict, token: str) -> list[dict]:
+    """取行程列表，按 start_time 升序返回。"""
+    try:
+        r = sess.get(
+            f"{BASE}/stu/trip/list",
+            headers=headers(token),
+            params={"pageNum": 1, "pageSize": 10},
+            timeout=cfg["request_timeout"],
+        )
+        rows = r.json().get("rows") or []
+        return sorted(rows, key=lambda x: x.get("startTime") or "")
+    except Exception as e:
+        log(f"  查行程列表失败: {e}")
+        return []
+
+
+def active_trip(trips: list[dict], today: str) -> dict | None:
+    """
+    若「今天」落在某条行程的起止日期内则返回该行程，否则返回 None。
+
+    抓包确认：接口返回的 startTime/endTime 是 ISO 串，日期固定带 T00:00:00。
+    业务语义 —— 起始日整天算在内（00:00 起），结束日整天算在内（23:59 止），
+    即闭区间 [start.date, end.date]。
+    """
+    for trip in trips:
+        try:
+            s = datetime.fromisoformat(trip["startTime"]).date().isoformat()
+            e = datetime.fromisoformat(trip["endTime"]).date().isoformat()
+        except (KeyError, ValueError, TypeError):
+            continue
+        if s <= today <= e:
+            return trip
+    return None
+
+
 def resolve_coords(sess: requests.Session, cfg: dict,
                    token: str) -> tuple[float, float]:
     """
@@ -614,7 +598,7 @@ def main() -> int:
 
     def finish(status: str, summary: str, fatal: bool = False) -> int:
         """
-        status —— ST_SUCCESS / ST_FAILURE / ST_SKIPPED，决定发哪类通知
+        status —— ST_SUCCESS / ST_FAILURE，决定发哪类通知
         fatal  —— 脚本自身是否失败（登录不上、取不到坐标等），决定退出码
 
         退出码只反映脚本能否完成流程，不反映签到结果。业务结果通过
@@ -624,11 +608,6 @@ def main() -> int:
             sent["done"] = True
             notify(cfg, status, summary)
         return 1 if fatal else 0
-
-    # 总开关：关闭时直接跳过，不登录、不查记录，也不做任何提交。
-    if not cfg["enabled"]:
-        log("JXF_ENABLED=false，跳过本次打卡")
-        return finish(ST_SKIPPED, "已在配置中停用（JXF_ENABLED=false）")
 
     sess = requests.Session()
     token = login(sess, cfg)
@@ -674,6 +653,24 @@ def main() -> int:
             f"今天已有 {len(recs)} 条记录，未提交。"
             "请自行核实该记录是否有效，或加 --force 强制提交"
         )
+
+    # 预检查：今天处于行程（请假/外出）起止日期内时不提交 —— 行程期间无需打卡。
+    # 业务上不算失败也不算成功，用 ST_FAILURE 的通知样式带专属文案说明原因；
+    # 退出码 0。要强制提交用 --force。
+    if not args.force:
+        trips = fetch_trips(sess, cfg, token)
+        trip = active_trip(trips, today)
+        if trip:
+            log(f"本地时间 {today} 在行程范围内："
+                f"{trip.get('startTime')} ~ {trip.get('endTime')} "
+                f"（{trip.get('province')}{trip.get('city')}"
+                f"{trip.get('district')}）")
+            log("未提交签到（行程期间无需打卡）")
+            return finish(
+                ST_FAILURE,
+                "当前在行程内，无需打卡。"
+                "如确需打卡，请在 GitHub Action 手动执行一次，并勾选强制打卡"
+            )
 
     try:
         lng, lat = resolve_coords(sess, cfg, token)

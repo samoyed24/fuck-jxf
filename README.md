@@ -130,27 +130,17 @@ Fork 之后，GitHub **默认不运行 fork 仓库里的 workflow**，定时任�
 | `JXF_USERNAME` | 登录账号（学号） |
 | `JXF_PASSWORD` | 登录密码 |
 
-**可选：总开关**
-
-| Secret 名称 | 默认 | 说明 |
-|---|---|---|
-| `JXF_ENABLED` | `true` | 设为 `false` 时，即使满足条件也**跳过打卡** |
-
-用途：临时停用（放假、实习结束等），无需删除 secrets 或禁用 workflow。
-跳过时仍会发送通知（见下方 `JXF_NOTIFY_SKIPPED`）。
-
 **可选：通知开关**（与通道无关，控制「何时通知」）
 
 | Secret 名称 | 默认 | 说明 |
 |---|---|---|
 | `JXF_NOTIFY_SUCCESS` | `true` | 签到成功时是否通知 |
 | `JXF_NOTIFY_FAILURE` | `true` | 签到失败时是否通知 |
-| `JXF_NOTIFY_SKIPPED` | `true` | **跳过打卡**时是否通知 |
 
 布尔值接受 `true/false`、`yes/no`、`1/0`、`on/off`（不区分大小写）。
 **写错会直接报错退出**，不会静默取默认值。
 
-> **默认三项均发送通知。** 成功通知同时充当**心跳信号** ——
+> **默认两项均发送通知。** 成功通知同时充当**心跳信号** ——
 > 若某周未收到，说明任务未执行（如 workflow 被停用、凭据失效），
 > 相比仅发送失败通知，更易察觉此类静默故障。
 >
@@ -194,6 +184,8 @@ GitHub 账号是否已 Star，否则调用返回 `403 STAR_REQUIRED`。
 | `JXF_PC_KEY` | API Key，形如 `pck_xxx` |
 | `JXF_PC_TO` | 收件邮箱（须与上一步验证过的地址一致） |
 | `JXF_PC_URL` | API 地址，默认 `https://notify.portcloud.online`，一般不用填 |
+
+该通道仅确认异步发送请求已受理，不等待或查询最终投递结果。
 
 **可选：通知通道 2 —— SMTP 邮件**
 
@@ -251,8 +243,11 @@ on:
 
 ### 5. 手动触发
 
-**Actions → 自动签到 → Run workflow**，可勾选「只走流程不实际提交」
-（对应 `--dry-run`）先验证配置：
+**Actions → 自动签到 → Run workflow**，有两个勾选项：
+
+- **只走流程不实际提交**（对应 `--dry-run`）：验证配置用。
+- **强制打卡**（对应 `--force`）：忽略「今天已有记录」与「当前在行程内」
+  两个跳过条件，仍尝试提交。行程期间确实需要打卡时用它。
 
 ![手动触发](docs/run-manually-1.png)
 
@@ -381,7 +376,7 @@ uv pip install -r requirements.txt
 python signin.py            # 签到
 python signin.py --check    # 只查状态，不签到
 python signin.py --dry-run  # 走完整流程但不提交
-python signin.py --force    # 今天已有记录时仍强制提交一次
+python signin.py --force    # 忽略「已有记录/行程内」两个跳过条件，仍提交
 ```
 
 **退出码只表示脚本自身是否执行成功，不表示签到结果。**
@@ -390,6 +385,7 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 |---|---|---|
 | 签到成功 | 0 | 成功 |
 | 当天已有记录，未提交 | 0 | **失败** |
+| 当前在行程内，未提交 | 0 | **失败**（说明行程期间无需打卡） |
 | 服务端拒绝签到 | 0 | **失败** |
 | 登录失败 | 1 | 失败 |
 | 取不到坐标 | 1 | 失败 |
@@ -400,6 +396,10 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 **若当天已有签到记录，脚本不会重复提交**，并发送失败通知。
 原因：脚本未执行签到动作，且已有记录是否被系统正常认定无法通过接口判定，
 需人工核实。确认无误后如需强制再提交，加 `--force`。
+
+**若当前处于行程（请假/外出）的起止日期内**（起始日整天、结束日整天都
+算在内），脚本同样不提交，并通知「当前在行程内，无需打卡。如确需打卡，
+请在 GitHub Action 手动执行一次，并勾选强制打卡」。
 
 > 需要定时执行请使用 GitHub Actions（见上文），无需本地常驻进程。
 
@@ -417,19 +417,12 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 | `JXF_USERNAME` | 登录账号（学号） |
 | `JXF_PASSWORD` | 登录密码 |
 
-**可选：总开关**
-
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `JXF_ENABLED` | `true` | 设为 `false` 时跳过打卡 |
-
 **可选：通知开关**（与通道无关）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `JXF_NOTIFY_SUCCESS` | `true` | 成功时是否通知 |
 | `JXF_NOTIFY_FAILURE` | `true` | 失败时是否通知 |
-| `JXF_NOTIFY_SKIPPED` | `true` | 跳过打卡时是否通知 |
 
 > 旧名 `JXF_MAIL_NOTIFY_SUCCESS` / `JXF_MAIL_NOTIFY_FAILURE` 仍兼容，
 > 但新名优先。
@@ -444,6 +437,11 @@ python signin.py --force    # 今天已有记录时仍强制提交一次
 | `JXF_PC_KEY` | — | API Key，形如 `pck_xxx` |
 | `JXF_PC_TO` | — | 收件邮箱（需预先验证） |
 | `JXF_PC_URL` | `https://notify.portcloud.online` | API 地址 |
+
+Portcloud Notify 使用异步投递：发送接口返回 `201` 和 `log_id` 即视为已受理，
+脚本不轮询最终投递结果。日志中的「已受理」不代表邮件已实际送达；
+需要确认投递结果时，可在 Portcloud 控制台查看发送日志。
+请求异常或接口拒绝仍会记录错误，但不会影响签到结果。
 
 **可选：通道 2 —— SMTP 邮件**
 
@@ -518,11 +516,8 @@ A: 这是预检查生效，不是故障。脚本发现当天已有签到记录�
 > （如同时配置了本地 launchd 和 GitHub Actions）。
 
 **Q: 怎么临时停止打卡？**
-A: 把 `JXF_ENABLED` 设为 `false`。此时脚本不登录、不查记录、不提交，
-直接跳过并发送「跳过」通知（由 `JXF_NOTIFY_SKIPPED` 控制）。
-
-适合放假、实习结束等场景 —— 不必删除 secrets，也不必禁用 workflow，
-恢复时改回 `true` 即可。
+A: 没有开关变量。在 GitHub 上 **Settings → Actions → 禁用签到 workflow**
+（或本地删除 launchd/cron 任务）；恢复时重新启用即可。
 
 **Q: 验证码识别失败？**
 A: 脚本默认重试 6 次（每次重新获取验证码）。若持续失败，可能是验证码机制变更，需要调整 OCR 逻辑。
