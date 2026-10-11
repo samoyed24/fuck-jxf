@@ -213,16 +213,16 @@ GitHub 账号是否已 Star，否则调用返回 `403 STAR_REQUIRED`。
 
 ### 4. 触发时间
 
-已配置为 **每周一北京时间 09:00**（UTC 周一 01:00）自动执行：
+已配置为 **每周一北京时间 07:59**（UTC 周日 23:59）自动执行：
 
 ```yaml
 on:
   schedule:
-    - cron: '0 1 * * 1'   # UTC 周一 01:00 = 北京周一 09:00
+    - cron: '59 23 * * 0'   # UTC 周日 23:59 = 北京周一 07:59
 ```
 
 > **GitHub Actions 的 cron 使用 UTC 时区。**
-> 另外，定时任务在平台高负载时可能延迟数分钟至一小时，属正常现象。
+> 定时任务在平台高负载时可能延迟或丢弃，**不保证准时执行，也没有一小时的延迟上限**。
 
 #### 想改打卡时间？
 
@@ -232,10 +232,10 @@ on:
 2. 修改 `.github/workflows/signin.yml` 里的 cron 表达式
 3. 提交并推送到默认分支
 
-**北京时间 = UTC + 8**，所以 `北京 09:00` 要写成 `UTC 01:00`：
+**北京时间 = UTC + 8**，所以 `北京周一 07:59` 要写成 `UTC 周日 23:59`，星期也要改为周日：
 
 ```yaml
-- cron: '0 1 * * 1'      # 周一 09:00 北京（默认）
+- cron: '59 23 * * 0'    # 周一 07:59 北京（默认；UTC 为周日）
 - cron: '0 10 * * 1'     # 周一 18:00 北京
 - cron: '0 1 * * *'      # 每天 09:00 北京
 - cron: '0 1 * * 1,3,5'  # 周一/三/五 09:00 北京
@@ -469,7 +469,7 @@ Portcloud Notify 使用异步投递：发送接口返回 `201` 和 `log_id` 即�
 | `.env.example` | 凭据模板（`cp .env.example .env` 后填写） |
 | `.env` | 你的凭据（已被 gitignore） |
 | `requirements.txt` | Python 依赖 |
-| `.github/workflows/signin.yml` | 定时签到（每周一北京时间 09:00） |
+| `.github/workflows/signin.yml` | 定时签到（每周一北京时间 07:59） |
 | `.github/workflows/keepalive.yml` | 保活，防定时任务被自动停用（每月 1 日） |
 | `signin.log` | 运行日志（已被 gitignore） |
 | `.keepalive` | 保活时间戳，由 keepalive.yml 自动更新 |

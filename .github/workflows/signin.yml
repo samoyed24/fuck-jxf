@@ -2,9 +2,9 @@ name: 自动签到
 
 on:
   schedule:
-    # 北京时间每周一 09:00 = UTC 每周一 01:00
-    # 注意：GitHub 的定时任务在高负载时可能延迟数分钟到一小时
-    - cron: '0 1 * * 1'
+    # 北京时间每周一 07:59 = UTC 每周日 23:59（注意跨日）
+    # 注意：GitHub 定时任务可能延迟或丢弃，不保证准时执行
+    - cron: '59 23 * * 0'
   workflow_dispatch:
     inputs:
       dry_run:
