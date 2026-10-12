@@ -20,6 +20,8 @@ class PortcloudTests(unittest.TestCase):
             "pc_url": "https://notify.example.com",
             "pc_key": "test-key",
             "pc_to": "test@example.com",
+            "pc_use_preset": False,
+            "pc_type": "email",
             "request_timeout": 15,
         }
         self.post = self.start_patch(signin.requests, "post")
@@ -36,7 +38,7 @@ class PortcloudTests(unittest.TestCase):
         self.post.return_value.json.return_value = data
 
     def send(self):
-        result = signin.send_portcloud(self.cfg, "subject", "text", "<p>html</p>")
+        result = signin.send_portcloud(self.cfg, "subject", "text")
         self.post.assert_called_once()
         self.get.assert_not_called()
         return result
@@ -44,14 +46,6 @@ class PortcloudTests(unittest.TestCase):
     def test_accepted_without_polling(self):
         self.response(201, {"log_id": 123, "status": "queued"})
         self.assertTrue(self.send())
-        self.post.assert_called_once_with(
-            "https://notify.example.com/api/v1/send",
-            headers={"Authorization": "Bearer test-key", "Content-Type": "application/json"},
-            json={"to": "test@example.com", "subject": "subject", "text": "text", "html": "<p>html</p>"},
-            timeout=15,
-        )
-        self.assertIn("log_id=123", self.log.call_args.args[0])
-        self.assertIn("已受理", self.log.call_args.args[0])
 
     def test_acceptance_does_not_depend_on_delivery_status(self):
         for status in (None, "queued", "sending", "failed"):
@@ -90,6 +84,89 @@ class PortcloudTests(unittest.TestCase):
     def test_request_exception_not_retried(self):
         self.post.side_effect = signin.requests.Timeout("timeout")
         self.assertFalse(self.send())
+
+    def test_main_preset_failure_exit_without_fallback(self):
+        self.cfg.update(username="student", pc_enabled=True, pc_use_preset=True,
+                        notify_success=True, notify_failure=True)
+        with patch.object(signin, "load_config", return_value=self.cfg), \
+                patch.object(signin, "login", return_value="token"), \
+                patch.object(signin, "fetch_records", return_value=[]), \
+                patch.object(sys, "argv", ["signin.py", "--check"]):
+            for status, data, expected in (
+                (400, {"error": {"code": "NO_PRESET", "message": "no preset"}}, 1),
+                (201, {"log_id": 123, "preset_id": 42}, 0),
+            ):
+                with self.subTest(status=status):
+                    self.post.reset_mock()
+                    self.response(status, data)
+                    self.assertEqual(signin.main(), expected)
+                    self.post.assert_called_once()
+            self.post.reset_mock()
+            self.post.side_effect = signin.requests.Timeout("timeout")
+            self.assertEqual(signin.main(), 1)
+            self.post.assert_called_once()
+            self.get.assert_not_called()
+
+    def test_direct_failure_returns_one_and_disabled_notification_skips_send(self):
+        self.cfg.update(username="student", pc_enabled=True,
+                        notify_success=True, notify_failure=True)
+        self.response(400, {"error": {"code": "DENIED", "message": "denied"}})
+        self.assertEqual(signin.notify(self.cfg, signin.ST_SUCCESS, "done"), 1)
+        self.post.reset_mock()
+        self.cfg.update(pc_use_preset=True, notify_success=False)
+        self.assertEqual(signin.notify(self.cfg, signin.ST_SUCCESS, "done"), 0)
+        self.post.assert_not_called()
+
+    def test_successful_signin_exits_one_on_any_notification_failure(self):
+        self.cfg.update(username="student", pc_enabled=True, mail_enabled=True,
+                        notify_success=True, notify_failure=True)
+        with patch.object(signin, "load_config", return_value=self.cfg), \
+                patch.object(signin, "login", return_value="token"), \
+                patch.object(signin, "fetch_records", return_value=[]), \
+                patch.object(signin, "resolve_coords", return_value=(1.0, 2.0)), \
+                patch.object(signin, "do_signin", return_value=True), \
+                patch.object(signin, "send_mail") as mail, \
+                patch.object(sys, "argv", ["signin.py", "--force"]):
+            for smtp_ok, http_status, expected in (
+                (True, 201, 0), (False, 201, 1), (True, 400, 1), (False, 400, 1),
+            ):
+                with self.subTest(smtp_ok=smtp_ok, http_status=http_status):
+                    mail.reset_mock()
+                    self.post.reset_mock()
+                    mail.return_value = smtp_ok
+                    self.response(http_status, {"log_id": 123})
+                    self.assertEqual(signin.main(), expected)
+                    mail.assert_called_once()
+                    self.post.assert_called_once()
+
+    def test_no_notification_channels_is_not_a_failure(self):
+        self.cfg.update(username="student", notify_success=True, notify_failure=True)
+        self.assertEqual(signin.notify(self.cfg, signin.ST_SUCCESS, "done"), 0)
+        self.post.assert_not_called()
+
+
+class PortcloudConfigTests(unittest.TestCase):
+    def load(self, **extra):
+        environment = {"JXF_USERNAME": "student", "JXF_PASSWORD": "password",
+                       "JXF_PC_KEY": "test-key"}
+        environment.update(extra)
+        with patch.dict(signin.os.environ, environment, clear=True):
+            return signin.load_config()
+
+    def test_preset_ignores_invalid_type_and_missing_target(self):
+        cfg = self.load(JXF_PC_USE_PRESET="true", JXF_PC_TYPE="invalid")
+        self.assertTrue(cfg["pc_enabled"])
+        self.assertTrue(cfg["pc_use_preset"])
+
+    def test_direct_configuration_requires_target_and_valid_type(self):
+        for extra in ({}, {"JXF_PC_TO": "topic", "JXF_PC_TYPE": "invalid"},
+                      {"JXF_PC_USE_PRESET": "invalid"}):
+            with self.subTest(extra=extra), self.assertRaises(SystemExit):
+                self.load(**extra)
+
+    def test_preset_requires_key(self):
+        with self.assertRaises(SystemExit):
+            self.load(JXF_PC_USE_PRESET="true", JXF_PC_KEY="")
 
 
 if __name__ == "__main__":

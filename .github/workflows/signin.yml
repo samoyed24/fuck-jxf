@@ -53,6 +53,8 @@ jobs:
           JXF_MAIL_TO: ${{ secrets.JXF_MAIL_TO }}
           # 通道 2：Portcloud Notify（可选）
           JXF_PC_KEY: ${{ secrets.JXF_PC_KEY }}
+          JXF_PC_USE_PRESET: ${{ secrets.JXF_PC_USE_PRESET }}
+          JXF_PC_TYPE: ${{ secrets.JXF_PC_TYPE }}
           JXF_PC_TO: ${{ secrets.JXF_PC_TO }}
           JXF_PC_URL: ${{ secrets.JXF_PC_URL }}
         run: |
