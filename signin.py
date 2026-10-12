@@ -24,7 +24,7 @@ fuck-jxf — 自动登录 + 验证码识别 + 签到
   1. SMTP 邮件    —— JXF_MAIL_* 系列
   2. Portcloud Notify（HTTP API）—— JXF_PC_* 系列
   何时通知由 JXF_NOTIFY_SUCCESS / JXF_NOTIFY_FAILURE 控制，与通道无关。
-  通知发送失败不会影响签到结果。
+  通知失败不改变签到结果，但任一已启用通道发送失败会令脚本退出码为 1。
 """
 from __future__ import annotations
 
@@ -202,14 +202,24 @@ def load_config() -> dict:
     # --- 通道 2：Portcloud Notify ---
     cfg.setdefault("pc_url", "https://notify.portcloud.online")
     cfg["pc_url"] = cfg["pc_url"].rstrip("/")
-    # key 与 to 必须成对出现
-    if bool(cfg.get("pc_key")) != bool(cfg.get("pc_to")):
-        missing = "JXF_PC_TO" if cfg.get("pc_key") else "JXF_PC_KEY"
-        raise SystemExit(
-            f"Portcloud Notify 配置不完整，缺少：{missing}\n"
-            "  需要同时配置 JXF_PC_KEY / JXF_PC_TO，或全部留空以禁用该通道"
-        )
-    cfg["pc_enabled"] = bool(cfg.get("pc_key") and cfg.get("pc_to"))
+    cfg["pc_use_preset"] = _parse_bool(
+        _env_or("JXF_PC_USE_PRESET") or "false", "JXF_PC_USE_PRESET")
+    if cfg["pc_use_preset"]:
+        # 预设在服务端解析，忽略本地 type 与 to（包括无效值）。
+        if not cfg.get("pc_key"):
+            raise SystemExit("Portcloud 发送预设需要配置 JXF_PC_KEY")
+        cfg["pc_enabled"] = True
+    else:
+        cfg["pc_type"] = _env_or("JXF_PC_TYPE") or "email"
+        if cfg["pc_type"] not in ("email", "ntfy"):
+            raise SystemExit("JXF_PC_TYPE 必须是 email 或 ntfy")
+        if bool(cfg.get("pc_key")) != bool(cfg.get("pc_to")):
+            missing = "JXF_PC_TO" if cfg.get("pc_key") else "JXF_PC_KEY"
+            raise SystemExit(
+                f"Portcloud Notify 配置不完整，缺少：{missing}\n"
+                "  需要同时配置 JXF_PC_KEY / JXF_PC_TO，或全部留空以禁用该通道"
+            )
+        cfg["pc_enabled"] = bool(cfg.get("pc_key") and cfg.get("pc_to"))
 
     if not (cfg["mail_enabled"] or cfg["pc_enabled"]):
         log("未配置任何通知通道，仅输出日志")
@@ -226,7 +236,7 @@ def load_config() -> dict:
 
 def send_mail(cfg: dict, subject: str, text: str, html_body: str) -> bool:
     """
-    通过 SMTP 发送通知。失败只记录，不影响签到结果。
+    通过 SMTP 发送通知，返回是否发送成功。
 
     同时提供 text 与 html 两个版本：邮件客户端支持 HTML 时渲染 html，
     不支持时（或用户设置为纯文本）回退到 text。这是 MIME multipart/alternative
@@ -247,23 +257,21 @@ def send_mail(cfg: dict, subject: str, text: str, html_body: str) -> bool:
         log(f"  邮件已发送 → {cfg['mail_to']}")
         return True
     except Exception as e:
-        # 通知失败不应让整个任务失败 —— 签到本身可能已经成功
         log(f"  邮件发送失败: {e}")
         return False
 
 
-def send_portcloud(cfg: dict, subject: str, text: str, html_body: str) -> bool:
-    """
-    通过 Portcloud Notify 发送通知。
-
-    该接口支持 text 与 html 两个字段，同时提供以便客户端择优渲染。
-
-    HTTP 201 + log_id 表示请求已受理，实际投递由服务端异步完成。
-    此处不轮询投递状态，受理成功即可返回。
-    """
-    url = f"{cfg['pc_url']}/api/v1/send"
-    payload = {"to": cfg["pc_to"], "subject": subject,
-               "text": text, "html": html_body}
+def send_portcloud(cfg: dict, subject: str, text: str) -> bool:
+    """提交纯文本通知；201 + log_id 仅表示受理，不轮询或重发。"""
+    payload = {"title": subject, "body": text}
+    if cfg["pc_use_preset"]:
+        endpoint = "send-preset"
+        target = "发送预设"
+    else:
+        endpoint = "send"
+        payload.update(type=cfg["pc_type"], to=cfg["pc_to"])
+        target = f"{cfg['pc_type']}:{cfg['pc_to']}"
+    url = f"{cfg['pc_url']}/api/v1/{endpoint}"
     try:
         r = requests.post(
             url,
@@ -294,7 +302,7 @@ def send_portcloud(cfg: dict, subject: str, text: str, html_body: str) -> bool:
         if type(log_id) is not int or log_id <= 0:
             log("  Portcloud 受理响应缺少有效 log_id，投递结果未确认")
             return False
-        log(f"  Portcloud 已受理 → {cfg['pc_to']}"
+        log(f"  Portcloud 已受理 → {target}"
             f"（log_id={log_id}，异步投递，不查询结果）")
         return True
 
@@ -376,29 +384,29 @@ style="font-size:14px;color:#374151;">
 """
 
 
-def notify(cfg: dict, status: str, summary: str) -> None:
-    """按配置决定是否发送通知，并向所有已启用的通道投递。
-
-    status 为 ST_SUCCESS / ST_FAILURE 之一。
-    """
+def notify(cfg: dict, status: str, summary: str) -> int:
+    """按通知开关向所有已启用通道投递；任一通道失败返回 1。"""
     icon, word, switch, color = _STATUS_META[status]
     if not cfg[switch]:
-        return
+        return 0
 
     ts = f"{now():%Y-%m-%d %H:%M:%S}"
     subject = f"{icon} 签到{word} — {cfg['username']}"
 
-    # 纯文本版（邮件降级用，也是 Portcloud 的 text 字段）
+    # 纯文本版：SMTP 降级正文与 Portcloud 的 body 字段。
     text = (f"账号：{cfg['username']}\n"
             f"时间：{ts}（北京时间）\n"
             f"结果：{summary}\n")
 
-    html_body = _render_html(icon, word, color, cfg["username"], ts, summary)
-
+    failed = False
     if cfg.get("mail_enabled"):
-        send_mail(cfg, subject, text, html_body)
+        html_body = _render_html(icon, word, color, cfg["username"], ts, summary)
+        if not send_mail(cfg, subject, text, html_body):
+            failed = True
     if cfg.get("pc_enabled"):
-        send_portcloud(cfg, subject, text, html_body)
+        if not send_portcloud(cfg, subject, text):
+            failed = True
+    return 1 if failed else 0
 
 
 # ---------------------------------------------------------------- 验证码
@@ -601,13 +609,14 @@ def main() -> int:
         status —— ST_SUCCESS / ST_FAILURE，决定发哪类通知
         fatal  —— 脚本自身是否失败（登录不上、取不到坐标等），决定退出码
 
-        退出码只反映脚本能否完成流程，不反映签到结果。业务结果通过
-        通知传达，因此「已签到」「被服务端拒绝」等都不算失败。
+        退出码反映流程错误或任一通知通道发送失败，不反映签到业务结果。
+        「已签到」「被服务端拒绝」等业务结果通过通知传达。
         """
+        notification_exit = 0
         if not sent["done"]:
             sent["done"] = True
-            notify(cfg, status, summary)
-        return 1 if fatal else 0
+            notification_exit = notify(cfg, status, summary)
+        return 1 if fatal else notification_exit
 
     sess = requests.Session()
     token = login(sess, cfg)
@@ -639,7 +648,7 @@ def main() -> int:
     #
     # 业务上视为失败（发失败通知），因为脚本未执行签到动作，且已有记录
     # 是否被服务端认定无法由此接口判定，需人工核实。
-    # 但退出码仍为 0 —— 脚本本身正常完成了流程，退出码不表达业务结果。
+    # 通常退出码为 0；若通知发送失败则为 1，不改变签到结果。
     # 要强制提交用 --force。
     if recs and not args.force:
         log(f"今天已有 {len(recs)} 条签到记录：")
@@ -656,7 +665,7 @@ def main() -> int:
 
     # 预检查：今天处于行程（请假/外出）起止日期内时不提交 —— 行程期间无需打卡。
     # 业务上不算失败也不算成功，用 ST_FAILURE 的通知样式带专属文案说明原因；
-    # 退出码 0。要强制提交用 --force。
+    # 通常退出码 0（通知发送失败为 1）。要强制提交用 --force。
     if not args.force:
         trips = fetch_trips(sess, cfg, token)
         trip = active_trip(trips, today)
