@@ -44,6 +44,12 @@ from zoneinfo import ZoneInfo
 import ddddocr
 import requests
 from dotenv import load_dotenv
+from portcloud_notify import (
+    AcceptanceUnknownError,
+    APIError,
+    Client,
+    PortcloudNotifyError,
+)
 
 BASE = "https://jlujxf.com/server"
 HERE = Path(__file__).resolve().parent
@@ -262,57 +268,36 @@ def send_mail(cfg: dict, subject: str, text: str, html_body: str) -> bool:
 
 
 def send_portcloud(cfg: dict, subject: str, text: str) -> bool:
-    """提交纯文本通知；201 + log_id 仅表示受理，不轮询或重发。"""
-    payload = {"title": subject, "body": text}
-    if cfg["pc_use_preset"]:
-        endpoint = "send-preset"
-        target = "发送预设"
-    else:
-        endpoint = "send"
-        payload.update(type=cfg["pc_type"], to=cfg["pc_to"])
-        target = f"{cfg['pc_type']}:{cfg['pc_to']}"
-    url = f"{cfg['pc_url']}/api/v1/{endpoint}"
+    """通过 Portcloud Notify SDK 提交纯文本通知；受理即返回，不轮询、不重发。"""
     try:
-        r = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {cfg['pc_key']}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
+        client = Client(
+            api_key=cfg["pc_key"],
+            base_url=cfg["pc_url"],
             timeout=cfg["request_timeout"],
         )
-    except Exception as e:
+        if cfg["pc_use_preset"]:
+            accepted = client.send_preset(subject, text)
+            target = "发送预设"
+        else:
+            accepted = client.send(cfg["pc_type"], subject,
+                                   body=text, to=cfg["pc_to"])
+            target = f"{cfg['pc_type']}:{cfg['pc_to']}"
+    except APIError as e:
+        # 4xx：请求被拒绝，肯定没有入队
+        log(f"  Portcloud 发送失败: {e.code} — {e.message}")
+        return False
+    except AcceptanceUnknownError as e:
+        # 超时 / 5xx / 重定向 / 受理响应异常：可能已入队，绝不重发
+        code = f"（{e.code}）" if e.code else ""
+        log(f"  Portcloud 受理结果未知{code}，可能已入队，不重发")
+        return False
+    except PortcloudNotifyError as e:
         log(f"  Portcloud 请求异常: {e}")
         return False
 
-    # 先尝试解析结构化错误
-    try:
-        d = r.json()
-    except Exception:
-        log(f"  Portcloud 返回非 JSON（HTTP {r.status_code}）：{r.text[:200]}")
-        return False
-
-    if not isinstance(d, dict):
-        log(f"  Portcloud 响应格式异常（HTTP {r.status_code}）：{r.text[:200]}")
-        return False
-
-    if r.status_code == 201:
-        log_id = d.get("log_id")
-        if type(log_id) is not int or log_id <= 0:
-            log("  Portcloud 受理响应缺少有效 log_id，投递结果未确认")
-            return False
-        log(f"  Portcloud 已受理 → {target}"
-            f"（log_id={log_id}，异步投递，不查询结果）")
-        return True
-
-    err = d.get("error") or {}
-    if not isinstance(err, dict):
-        err = {}
-    code = err.get("code") or f"HTTP_{r.status_code}"
-    msg = err.get("message") or r.text[:200]
-    log(f"  Portcloud 发送失败: {code} — {msg}")
-    return False
+    log(f"  Portcloud 已受理 → {target}"
+        f"（log_id={accepted.log_id}，异步投递，不查询结果）")
+    return True
 
 
 # 通知状态

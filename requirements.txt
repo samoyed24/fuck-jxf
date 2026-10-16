@@ -1,3 +1,4 @@
 ddddocr>=1.6.1
 requests>=2.32.0
 python-dotenv>=1.0.0
+portcloud-notify>=0.1.1
