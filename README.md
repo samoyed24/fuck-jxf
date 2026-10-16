@@ -450,19 +450,22 @@ python signin.py --force    # 忽略「已有记录/行程内」两个跳过条�
 | `JXF_PC_USE_PRESET` | `false` | 使用服务端发送预设，启用后忽略 `JXF_PC_TYPE` / `JXF_PC_TO` |
 | `JXF_PC_TYPE` | `email` | 非预设模式类型，只接受 `email` / `ntfy` |
 | `JXF_PC_TO` | — | 非预设模式目标：已验证邮箱，或本账号已添加的完整 ntfy topic |
-| `JXF_PC_URL` | `https://notify.portcloud.online` | API 地址 |
+| `JXF_PC_URL` | `https://notify.portcloud.online` | API 地址，只填站点地址（不带 `/api/v1`） |
 
-非预设模式需要同时配置 `JXF_PC_KEY` / `JXF_PC_TO`，调用 `/api/v1/send`，
-提交 `type`、`to`、`title`、`body`。预设模式必须配置 `JXF_PC_KEY`，
-直接调用 `/api/v1/send-preset`，只提交 `title` 和纯文本 `body`。
-未配置预设时服务返回 `400 NO_PRESET`，需在控制台创建，不会回退到普通发送。
+非预设模式需要同时配置 `JXF_PC_KEY` / `JXF_PC_TO`；预设模式必须配置 `JXF_PC_KEY`。
+发送走官方 Python SDK [`portcloud-notify`](https://pypi.org/project/portcloud-notify/)，
+不再手写 HTTP 与响应解析：非预设模式调用 `Client.send(type, title, body=…, to=…)`
+（对应 `POST /api/v1/send`），预设模式调用 `Client.send_preset(title, body)`
+（对应 `POST /api/v1/send-preset`，只提交 `title` 和纯文本 `body`，预设由服务端解析）。
+未配置预设时 SDK 抛出 `APIError`（`code=NO_PRESET`），需在控制台创建，不会回退到普通发送。
 预设是 1–3 个邮箱 / ntfy 节点的有序链路，不是群发；
 节点明确失败才顺延，成功或结果未知则停止，避免重复通知。
 
-两种模式均以 HTTP `201` 和有效 `log_id` 确认受理，不轮询最终投递结果。
+两种模式都以受理为准：SDK 只在 HTTP `201` 且 `log_id` 有效时返回成功，不轮询最终投递结果。
 普通模式的 `log_id` 是首个目标的日志；预设模式代表整条链路。
 「已受理」不等于已送达，需要确认时在 Portcloud 控制台查看发送日志。
-请求异常、接口拒绝或无法确认受理均返回失败，让脚本退出码为 `1`，
+4xx（含 `NO_PRESET`）打印 `error.code` 并计为失败；超时、5xx、重定向或受理响应异常
+按「结果未知」处理，同样计为失败。两者都让脚本退出码为 `1`，
 但不会改变签到结果，也不会自动重发。邮件样式由服务端生成，不接受自定义 HTML。
 
 接口参考：[开发站 OpenAPI](https://dev-notify.portcloud.online/api/openapi.json)、
